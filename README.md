@@ -13,7 +13,6 @@ The core of this mod is a **BFS (Breadth-First Search) rail scanner**. Instead o
 * **Smart Braking:** Smooth deceleration when approaching other trains or occupied stations.
 * **Dynamic Rerouting:** If a junction is blocked, the train attempts to find an alternative path.
 * **Parallel Track Awareness:** Intelligent scanning that ignores trains on adjacent tracks.
-* **Debug Mode:** Specialized "Goggles" overlay that visualizes the rail graph, distances, and train states.
 
 ## 🛠 Technical Details
 * **Platform:** Minecraft Forge / NeoForge
