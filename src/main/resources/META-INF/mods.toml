@@ -1,0 +1,66 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="All Rights Reserved"
+
+# ==============================================================
+# Create: Railway Evolution — Smart Train AI
+# Author: Fizzy_lovely
+# ==============================================================
+[[mods]]
+modId="create_railway"
+version="1.0.1"
+displayName="Create: Railway Evolution"
+logoFile="logo.png"
+authors="Fizzy_lovely"
+description='''
+Your Create trains just got a brain.
+
+Railway Evolution gives every train on your network its own AI — they detect
+each other, negotiate right-of-way, and keep traffic flowing without signals
+or player intervention. Trains slow down gracefully when someone is ahead,
+pull over when things get crowded, and reroute themselves when a junction
+stays blocked for too long.
+
+No more head-on collisions. No more deadlocked loops. No more babysitting.
+
+Features:
+- Smooth graduated braking — trains approach each other like they actually
+  care about their cargo
+- Smart junction rerouting — stuck at a switch? The AI finds the free branch
+  and takes it
+- Parallel track awareness — trains on adjacent lines don't interfere with
+  each other
+- Depot & station detection — parked trains are treated gently, not as walls
+- Contextual platoon braking — if the train ahead is already stopped in a jam,
+  the next one starts slowing down early
+
+Works on top of Create 0.5.1+ with zero config required.
+For best results: give your trains a schedule and let the AI handle the rest.
+
+Found a bug? Send a report with an attached screenshot or photo to:
+1xcodeteam@gmail.com
+
+This mod is developed by a single person — Fizzy_lovely.
+I can't do everything at once, so please be patient and understanding. Thank you!
+'''
+
+[[dependencies.create_railway]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.create_railway]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1]"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.create_railway]]
+    modId="create"
+    mandatory=true
+    versionRange="[0.5.1,)"
+    ordering="AFTER"
+    side="BOTH"
