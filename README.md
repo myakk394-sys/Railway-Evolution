@@ -1,29 +1,27 @@
-# 🚂 Railway Evolution (Create Addon)
+# 🚂 Railway Evolution
 
-**Railway Evolution** is a technical addon for the [Create Mod](https://modrinth.com/mod/create) that gives trains a "brain". It implements a custom pathfinding and collision avoidance system to make rail networks smarter and more autonomous.
+**Your Create trains just got a brain.**
 
-## 🧠 The Logic
-The core of this mod is a **BFS (Breadth-First Search) rail scanner**. Instead of relying solely on vanilla signals, trains actively "scan" the track ahead to:
-* **Calculate braking distances** based on current speed.
-* **Detect obstacles** and other trains in real-time.
-* **Negotiate junctions** by checking which branch is clear.
-* **Prevent deadlocks** in complex station throat layouts.
+**Railway Evolution** gives every train on your network its own AI — they detect each other, negotiate right-of-way, and keep traffic flowing without signals or player intervention. Trains slow down gracefully, manage junctions intelligently, and reroute themselves when blocked.
 
-## ✨ Key Features
-* **Smart Braking:** Smooth deceleration when approaching other trains or occupied stations.
-* **Dynamic Rerouting:** If a junction is blocked, the train attempts to find an alternative path.
-* **Parallel Track Awareness:** Intelligent scanning that ignores trains on adjacent tracks.
+No more head-on collisions. No more deadlocked loops. No more babysitting.
 
-## 🛠 Technical Details
-* **Platform:** Minecraft Forge / NeoForge
-* **Version:** 1.20.1
-* **Core Dependency:** Create 0.5.1+
+### ⚙️ Supported Versions
+* **Forge:** 1.20.1, 1.19.2, 1.18.2
+* **NeoForge:** 1.21.1
 
-## ⚠ Disclaimer
-This project is currently in **BETA**. 
-Developed by **Fizzy_lovely** (1xCodeTeam). 
+### ✨ Features
+* **v1.0.5 Stable Core:** A fully re-engineered engine providing professional-grade pathfinding and traffic management.
+* **Smooth Graduated Braking:** Trains approach each other realistically, taking cargo weight and momentum into account.
+* **Smart Junction Rerouting:** Stuck at a switch? The AI automatically finds the free branch and takes it.
+* **Parallel Track Awareness:** Trains on adjacent lines operate independently without interference.
+* **Ecosystem Integration:** AI-driven trains perceive player-controlled vehicles as dynamic participants, allowing for seamless traffic flow management.
+* **Contextual Platoon Braking:** If the train ahead is stuck, the trailing AI starts slowing down early, preventing pile-ups.
+* **Works Out of the Box:** Compatible with complex rail networks. Just set up your schedules and let the AI handle the traffic.
 
-> *Note: This mod was built with a lot of passion and one working hand (thanks to an Ilizarov apparatus). Please be patient with bug fixes!*
+### 🛠 Technical Info
+This mod uses advanced spatial awareness algorithms and real-time path projection to ensure your tracks stay clear and efficient. The v1.0.5 update introduces a robust, multi-layered architecture, providing a seamless experience even for the most complex rail networks.
 
-## 📜 License
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+### 🐞 Support
+This project is developed by **Fizzy_lovely** (1xCodeTeam). Your feedback is invaluable! If you encounter any issues, please feel free to reach out. Thank you for your patience and support! Let’s keep the tracks busy!
+
