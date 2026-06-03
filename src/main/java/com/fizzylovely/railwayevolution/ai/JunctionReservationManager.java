@@ -7,111 +7,163 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Junction Reservation Manager — mutex system for track intersections.
+ * Junction Reservation Manager — proximity-priority mutex for track intersections.
  *
- * Problem: at cross-intersections (перекрёстки) and T-junctions, two trains
- * approaching from perpendicular directions can both enter simultaneously.
- * Neither can proceed because they physically block each other → deadlock.
+ * v1.0.5 Priority System:
+ *   The train CLOSEST to the junction wins the reservation.
+ *   If a closer train arrives after an existing reservation, it can STEAL it.
+ *   The losing train receives a "ghost pass" duration — it temporarily ignores
+ *   the winning train so it can pass through freely without being stopped again.
  *
- * Solution: before entering a junction (node with 3+ connections), a train
- * must RESERVE it. If another train already holds the reservation, this
- * train stops and waits. First-come-first-served with UUID tiebreak.
- *
- * Reservations auto-expire after EXPIRY_TICKS to prevent permanent locks
- * from crashed/removed trains.
- *
- * Thread-safe via ConcurrentHashMap.
+ * Ghost Pass logic:
+ *   When train B (far) is denied because train A (close) holds the reservation:
+ *   → B records A's UUID with a ghost-pass expiry tick
+ *   → For the next GHOST_PASS_TICKS ticks, B's scanners skip A as an obstacle
+ *   → A passes the junction unobstructed
+ *   → After expiry, B sees A normally again
  *
  * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public class JunctionReservationManager {
 
     private static final JunctionReservationManager INSTANCE = new JunctionReservationManager();
-    private static final long EXPIRY_TICKS = 200; // 10 seconds — auto-release stuck reservations
 
-    /**
-     * Reservation entry for a single junction.
-     */
+    /** Ticks a reservation stays valid after the last renewal. */
+    private static final long EXPIRY_TICKS = 60; // 3 seconds
+
+    /** Distance margin: must be this much closer to steal a reservation. */
+    private static final double STEAL_MARGIN = 3.0; // blocks
+
     public static class Reservation {
-        public final UUID trainId;
-        public final long reservedAtTick;
-        public final long expiresAtTick;
+        public final UUID  trainId;
+        public final long  reservedAtTick;
+        public final long  expiresAtTick;
+        /** Distance from this train to the junction at reservation time (blocks). */
+        public final double distanceToJunction;
 
-        public Reservation(UUID trainId, long reservedAtTick) {
-            this.trainId = trainId;
-            this.reservedAtTick = reservedAtTick;
-            this.expiresAtTick = reservedAtTick + EXPIRY_TICKS;
+        public Reservation(UUID trainId, long tick, double dist) {
+            this.trainId           = trainId;
+            this.reservedAtTick    = tick;
+            this.expiresAtTick     = tick + EXPIRY_TICKS;
+            this.distanceToJunction = dist;
         }
     }
 
-    // Junction key (packed XZ coordinates) → reservation
+    // Junction key → reservation
     private final ConcurrentHashMap<Long, Reservation> reservations = new ConcurrentHashMap<>();
 
-    public static JunctionReservationManager getInstance() {
-        return INSTANCE;
-    }
+    public static JunctionReservationManager getInstance() { return INSTANCE; }
+
+    private JunctionReservationManager() {}
+
+    // ── Core API ──────────────────────────────────────────────────────────────
 
     /**
-     * Pack junction coordinates into a single long key.
-     * Uses block-level precision (integer XZ).
+     * Pack junction coordinates into a long key (block precision).
      */
     public static long packKey(int x, int z) {
         return ((long) x << 32) | (z & 0xFFFFFFFFL);
     }
-
     public static long packKey(double x, double z) {
         return packKey((int) Math.floor(x), (int) Math.floor(z));
     }
 
     /**
-     * Try to reserve a junction for a train.
+     * Try to reserve a junction with proximity-based priority.
      *
-     * @return true if reservation granted (or train already holds it),
-     *         false if another train holds a valid reservation
+     * @param junctionKey packed junction coordinates
+     * @param trainId     requesting train
+     * @param currentTick current game tick
+     * @param myDist      distance from this train to the junction (blocks)
+     * @return GRANTED if we now hold the reservation, DENIED if another closer train holds it
      */
-    public boolean tryReserve(long junctionKey, UUID trainId, long currentTick) {
+    public ReserveResult tryReserve(long junctionKey, UUID trainId, long currentTick, double myDist) {
         Reservation existing = reservations.get(junctionKey);
 
-        // No reservation or expired → grant
+        // ── No reservation or expired → grant immediately ──
         if (existing == null || currentTick > existing.expiresAtTick) {
-            reservations.put(junctionKey, new Reservation(trainId, currentTick));
-            return true;
+            reservations.put(junctionKey, new Reservation(trainId, currentTick, myDist));
+            CreateRailwayMod.aiDebug("[Junction] {} GRANTED (dist={:.1f}b, fresh)",
+                    trainId.toString().substring(0, 8), myDist);
+            return ReserveResult.granted(null);
         }
 
-        // We already hold the reservation → renew
+        // ── We already hold the reservation → renew ──
         if (existing.trainId.equals(trainId)) {
-            reservations.put(junctionKey, new Reservation(trainId, currentTick));
-            return true;
+            reservations.put(junctionKey, new Reservation(trainId, currentTick, myDist));
+            return ReserveResult.granted(null);
         }
 
-        // Another train holds a valid reservation → denied
-        return false;
+        // ── Another train holds it: compare distances ──
+        double holderDist = existing.distanceToJunction;
+
+        // We are significantly CLOSER → steal the reservation
+        if (myDist < holderDist - STEAL_MARGIN) {
+            UUID loser = existing.trainId;
+            reservations.put(junctionKey, new Reservation(trainId, currentTick, myDist));
+            CreateRailwayMod.aiDebug(
+                    "[Junction] {} STOLE from {} (myDist={:.1f}b < holderDist={:.1f}b)",
+                    trainId.toString().substring(0, 8),
+                    loser.toString().substring(0, 8),
+                    myDist, holderDist);
+            // The loser (old holder) should now ghost-pass us
+            return ReserveResult.granted(loser);
+        }
+
+        // Holder is closer or equal → we yield
+        CreateRailwayMod.aiDebug(
+                "[Junction] {} DENIED by {} (myDist={:.1f}b, holderDist={:.1f}b)",
+                trainId.toString().substring(0, 8),
+                existing.trainId.toString().substring(0, 8),
+                myDist, holderDist);
+        return ReserveResult.denied(existing.trainId);
     }
 
     /**
-     * Release a junction reservation (called when train passes through or stops needing it).
-     * Only releases if the specified train actually holds the reservation.
+     * Legacy overload (no distance — uses MAX_VALUE so newer trains always steal).
+     * Used by old call sites that haven't been updated yet.
      */
+    public boolean tryReserve(long junctionKey, UUID trainId, long currentTick) {
+        ReserveResult r = tryReserve(junctionKey, trainId, currentTick, Double.MAX_VALUE);
+        return r.isGranted;
+    }
+
+    // ── Result type ───────────────────────────────────────────────────────────
+
+    public static final class ReserveResult {
+        public final boolean isGranted;
+        /**
+         * If DENIED: the UUID of the train that holds the junction (we should ghost-pass it).
+         * If GRANTED via steal: the UUID of the train that was displaced (it should ghost-pass us).
+         * null when granted normally (no competing train).
+         */
+        public final UUID ghostPassTarget;
+
+        private ReserveResult(boolean granted, UUID ghost) {
+            this.isGranted     = granted;
+            this.ghostPassTarget = ghost;
+        }
+        public static ReserveResult granted(UUID displacedTrain) { return new ReserveResult(true,  displacedTrain); }
+        public static ReserveResult denied (UUID holderTrain)    { return new ReserveResult(false, holderTrain); }
+    }
+
+    // ── Release ───────────────────────────────────────────────────────────────
+
     public void release(long junctionKey, UUID trainId) {
         Reservation existing = reservations.get(junctionKey);
         if (existing != null && existing.trainId.equals(trainId)) {
             reservations.remove(junctionKey);
-            CreateRailwayMod.aiDebug("[Junction] Train {} released junction {}",
+            CreateRailwayMod.aiDebug("[Junction] {} released junction {}",
                     trainId.toString().substring(0, 8), junctionKey);
         }
     }
 
-    /**
-     * Release ALL reservations held by a specific train.
-     * Called on train removal/despawn.
-     */
     public void releaseAll(UUID trainId) {
         reservations.entrySet().removeIf(e -> e.getValue().trainId.equals(trainId));
     }
 
-    /**
-     * Check if a junction is currently reserved by another train.
-     */
+    // ── Queries ───────────────────────────────────────────────────────────────
+
     public boolean isReservedByOther(long junctionKey, UUID myTrainId, long currentTick) {
         Reservation existing = reservations.get(junctionKey);
         if (existing == null) return false;
@@ -119,33 +171,16 @@ public class JunctionReservationManager {
         return !existing.trainId.equals(myTrainId);
     }
 
-    /**
-     * Get the UUID of the train holding a junction reservation (or null).
-     */
     public UUID getHolder(long junctionKey, long currentTick) {
         Reservation existing = reservations.get(junctionKey);
         if (existing == null || currentTick > existing.expiresAtTick) return null;
         return existing.trainId;
     }
 
-    /**
-     * Clean up expired reservations.
-     */
     public void cleanupExpired(long currentTick) {
         reservations.entrySet().removeIf(e -> currentTick > e.getValue().expiresAtTick);
     }
 
-    /**
-     * Number of active reservations.
-     */
-    public int size() {
-        return reservations.size();
-    }
-
-    /**
-     * Clear all reservations (server stop/reload).
-     */
-    public void clear() {
-        reservations.clear();
-    }
+    public int  size()  { return reservations.size(); }
+    public void clear() { reservations.clear(); }
 }

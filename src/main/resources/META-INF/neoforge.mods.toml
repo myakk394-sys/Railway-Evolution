@@ -6,7 +6,7 @@ license = "All Rights Reserved"
 
 [[mods]]
     modId = "create_railway"
-    version = "1.0.4"
+    version = "1.0.5"
     displayName = "Create: Railway Evolution — Vanilla Edition"
     logoFile = "logo.png"
     authors = "Fizzy_lovely"
@@ -29,6 +29,9 @@ Features:
 
 Works on top of Create 0.6+ / 6.0 with zero config required.
 For best results: give your trains a schedule and let the AI handle the rest.
+
+only on modrinth https://modrinth.com/mod/railway-evolution and 
+on github https://github.com/myakk394-sys/Railway-Evolution/tree/1.20.1-forge
 
 Found a bug? Send a report with an attached screenshot or photo to:
 1xcodeteam@gmail.com

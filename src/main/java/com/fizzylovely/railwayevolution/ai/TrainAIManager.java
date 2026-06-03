@@ -1,6 +1,7 @@
 package com.fizzylovely.railwayevolution.ai;
 
 import com.fizzylovely.railwayevolution.CreateRailwayMod;
+import com.fizzylovely.railwayevolution.ai.adapter.EcosystemRegistry;
 import com.fizzylovely.railwayevolution.config.RailwayConfig;
 import net.minecraft.server.level.ServerLevel;
 
@@ -79,7 +80,9 @@ public class TrainAIManager {
         StoppedTrainRegistry.getInstance().clear();
         MovingTrainRegistry.getInstance().clear();
         JunctionReservationManager.getInstance().clear();
-        CreateRailwayMod.aiLog("[AI Manager] Initialized with fresh VBS, accident zones, train registries, and junction reservations");
+        // v1.0.5: Reset ecosystem registry (AI + player train handles)
+        EcosystemRegistry.reset();
+        CreateRailwayMod.aiLog("[AI Manager] Initialized with fresh VBS, accident zones, train registries, junction reservations, and EcosystemRegistry");
     }
 
     public static TrainAIManager getInstance() {
@@ -97,6 +100,17 @@ public class TrainAIManager {
         if (currentTick - lastTrainScanTick >= scanInterval) {
             scanForTrains(level);
             lastTrainScanTick = currentTick;
+        }
+
+        // v1.0.5: Refresh EcosystemRegistry VarHandle cache (fast path, 0 boxing)
+        // Must run BEFORE controller ticks so PerceptionEngine has fresh data
+        EcosystemRegistry eco = EcosystemRegistry.getInstance();
+        eco.tickRefreshAll(currentTick);
+
+        // v1.0.5: Scan which trains are player-controlled (every 20 ticks)
+        // Creates/removes PlayerTrainHandle wrappers in EcosystemRegistry
+        if (currentTick % 20 == 0) {
+            eco.scanPlayerControls(level);
         }
 
         // Tick all AI controllers
@@ -260,6 +274,7 @@ public class TrainAIManager {
             }
 
             // Add controllers for new trains
+            EcosystemRegistry eco = EcosystemRegistry.getInstance();
             Set<UUID> activeIds = new HashSet<>();
             for (Map.Entry<UUID, ?> entry : createTrains.entrySet()) {
                 UUID id = entry.getKey();
@@ -273,15 +288,20 @@ public class TrainAIManager {
                 } else {
                     controllers.get(id).bindCreateTrain(entry.getValue());
                 }
+                // v1.0.5: Register in EcosystemRegistry for PerceptionEngine + PlayerTrainHandle
+                eco.getOrCreateAiHandle(id, entry.getValue());
             }
 
             // Remove controllers for removed trains
+            EcosystemRegistry ecoForRemoval = EcosystemRegistry.getInstance();
             controllers.keySet().removeIf(id -> {
                 if (!activeIds.contains(id)) {
                     VirtualBlockSystem.getInstance().releaseAll(id);
                     StoppedTrainRegistry.getInstance().remove(id);
                     MovingTrainRegistry.getInstance().remove(id);
                     JunctionReservationManager.getInstance().releaseAll(id);
+                    // v1.0.5: Remove from EcosystemRegistry
+                    ecoForRemoval.removeTrainHandle(id);
                     CreateRailwayMod.aiLog("[AI Manager] Detached AI from train {}", id.toString().substring(0, 8));
                     return true;
                 }
