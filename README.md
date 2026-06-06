@@ -3,6 +3,7 @@
 ![Forge 1.19.2](https://img.shields.io/badge/Forge-1.19.2-blue)
 ![Forge 1.20.1](https://img.shields.io/badge/Forge-1.20.1-blue)
 ![NeoForge 1.21.1](https://img.shields.io/badge/NeoForge-1.21.1-green)
+![Downloads](https://img.shields.io/badge/Downloads-3156-orange)
 
 ### 📥 Download
 [**![Download on Modrinth](https://img.shields.io/badge/Download_on-Modrinth-green?style=for-the-badge&logo=modrinth)**](https://modrinth.com/mod/railway-evolution)
