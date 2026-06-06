@@ -1,4 +1,4 @@
-![Railway Evolution](./assets/title.png)
+![Railway Evolution](https://raw.githubusercontent.com/myakk394-sys/Railway-Evolution/9c9c1d3f5d5e927500376b916f75e95510ad77a8/assets/title.png)
 ![Forge](https://img.shields.io/badge/Forge-1.20.1-blue)
 ![NeoForge](https://img.shields.io/badge/NeoForge-1.21.1-green)
 ![Downloads](https://img.shields.io/badge/Downloads-3156-orange)
