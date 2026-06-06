@@ -1,4 +1,7 @@
-# 🚂 Railway Evolution
+![Railway Evolution](./assets/title.png)
+![Forge](https://img.shields.io/badge/Forge-1.20.1-blue)
+![NeoForge](https://img.shields.io/badge/NeoForge-1.21.1-green)
+![Downloads](https://img.shields.io/badge/Downloads-3156-orange)
 
 **Your Create trains just got a brain.**
 
