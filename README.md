@@ -1,7 +1,8 @@
 ![Railway Evolution](https://raw.githubusercontent.com/myakk394-sys/Railway-Evolution/9c9c1d3f5d5e927500376b916f75e95510ad77a8/assets/title.png)
-![Forge](https://img.shields.io/badge/Forge-1.20.1-blue)
-![NeoForge](https://img.shields.io/badge/NeoForge-1.21.1-green)
-![Downloads](https://img.shields.io/badge/Downloads-3156-orange)
+![Forge 1.18.2](https://img.shields.io/badge/Forge-1.18.2-blue)
+![Forge 1.19.2](https://img.shields.io/badge/Forge-1.19.2-blue)
+![Forge 1.20.1](https://img.shields.io/badge/Forge-1.20.1-blue)
+![NeoForge 1.21.1](https://img.shields.io/badge/NeoForge-1.21.1-green)
 
 ### 📥 Download
 [**![Download on Modrinth](https://img.shields.io/badge/Download_on-Modrinth-green?style=for-the-badge&logo=modrinth)**](https://modrinth.com/mod/railway-evolution)
