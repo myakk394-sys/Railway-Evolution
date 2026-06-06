@@ -5,8 +5,11 @@
 ![NeoForge 1.21.1](https://img.shields.io/badge/NeoForge-1.21.1-green)
 ![Downloads](https://img.shields.io/badge/Downloads-3156-orange)
 
-### 📥 Download
-[**![Download on Modrinth](https://img.shields.io/badge/Download_on-Modrinth-green?style=for-the-badge&logo=modrinth)**](https://modrinth.com/mod/railway-evolution)
+### 📥 Download / Скачать
+[![Modrinth](https://img.shields.io/badge/Modrinth-Download-green?style=for-the-badge&logo=modrinth)](https://modrinth.com/mod/railway-evolution)
+
+*Mirror / Зеркало:*
+[![Modrinth.black](https://img.shields.io/badge/Modrinth.black-Mirror-black?style=for-the-badge&logo=modrinth)](https://modrinth.black/mod/railway-evolution)
 
 **Your Create trains just got a brain.**
 
