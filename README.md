@@ -3,6 +3,9 @@
 ![NeoForge](https://img.shields.io/badge/NeoForge-1.21.1-green)
 ![Downloads](https://img.shields.io/badge/Downloads-3156-orange)
 
+### 📥 Download
+[**![Download on Modrinth](https://img.shields.io/badge/Download_on-Modrinth-green?style=for-the-badge&logo=modrinth)**](https://modrinth.com/mod/railway-evolution)
+
 **Your Create trains just got a brain.**
 
 **Railway Evolution** gives every train on your network its own AI — they detect each other, negotiate right-of-way, and keep traffic flowing without signals or player intervention. Trains slow down gracefully, manage junctions intelligently, and reroute themselves when blocked.
