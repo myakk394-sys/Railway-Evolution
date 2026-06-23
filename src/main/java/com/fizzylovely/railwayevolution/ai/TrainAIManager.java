@@ -1,6 +1,7 @@
 package com.fizzylovely.railwayevolution.ai;
 
 import com.fizzylovely.railwayevolution.CreateRailwayMod;
+import com.fizzylovely.railwayevolution.ai.adapter.EcosystemRegistry;
 import com.fizzylovely.railwayevolution.config.RailwayConfig;
 import net.minecraft.server.level.ServerLevel;
 
@@ -26,6 +27,44 @@ public class TrainAIManager {
     private long lastTrainScanTick = 0;
     private long lastDiagnosticTick = 0;
 
+    // ── Global Priority Registry ──
+    // When a train has been starved (yielded too many times consecutively) it
+    // is granted a priority token here. Other trains check this registry before
+    // deciding whether to yield — if the approaching train has a token, they
+    // yield IMMEDIATELY instead of running their normal distance checks.
+    // Token maps trainId → expiry tick (automatically cleaned up each VBS cycle).
+    private final ConcurrentHashMap<UUID, Long> priorityTokens = new ConcurrentHashMap<>();
+
+    /**
+     * Grant a priority token to a train for DURATION ticks.
+     * Called by TrainAIController when it detects starvation.
+     */
+    public void grantPriority(UUID trainId, long expiryTick) {
+        priorityTokens.put(trainId, expiryTick);
+    }
+
+    /**
+     * Return true if trainId currently holds a valid priority token.
+     * Automatically removes expired tokens.
+     */
+    public boolean hasPriority(UUID trainId, long currentTick) {
+        Long expiry = priorityTokens.get(trainId);
+        if (expiry == null) return false;
+        if (currentTick > expiry) {
+            priorityTokens.remove(trainId);
+            return false;
+        }
+        return true;
+    }
+
+    /** Revoke a train's priority token (called when train starts moving again). */
+    public void revokePriority(UUID trainId) {
+        priorityTokens.remove(trainId);
+    }
+
+    /** Number of trains currently holding a priority token. */
+    public int getPriorityTokenCount() { return priorityTokens.size(); }
+
     // Cached reflection for Create Mod classes
     private boolean createModAvailable = true;
     private Object railwayManagerRef;
@@ -38,7 +77,12 @@ public class TrainAIManager {
         instance = new TrainAIManager();
         VirtualBlockSystem.reset();
         AccidentZoneMemory.reset();
-        CreateRailwayMod.LOGGER.info("[AI Manager] Initialized with fresh VBS and accident zone memory");
+        StoppedTrainRegistry.getInstance().clear();
+        MovingTrainRegistry.getInstance().clear();
+        JunctionReservationManager.getInstance().clear();
+        // v1.0.5: Reset ecosystem registry (AI + player train handles)
+        EcosystemRegistry.reset();
+        CreateRailwayMod.aiLog("[AI Manager] Initialized with fresh VBS, accident zones, train registries, junction reservations, and EcosystemRegistry");
     }
 
     public static TrainAIManager getInstance() {
@@ -58,6 +102,17 @@ public class TrainAIManager {
             lastTrainScanTick = currentTick;
         }
 
+        // v1.0.5: Refresh EcosystemRegistry VarHandle cache (fast path, 0 boxing)
+        // Must run BEFORE controller ticks so PerceptionEngine has fresh data
+        EcosystemRegistry eco = EcosystemRegistry.getInstance();
+        eco.tickRefreshAll(currentTick);
+
+        // v1.0.5: Scan which trains are player-controlled (every 20 ticks)
+        // Creates/removes PlayerTrainHandle wrappers in EcosystemRegistry
+        if (currentTick % 20 == 0) {
+            eco.scanPlayerControls(level);
+        }
+
         // Tick all AI controllers
         for (TrainAIController controller : controllers.values()) {
             try {
@@ -73,6 +128,9 @@ public class TrainAIManager {
         if (currentTick - lastVBSCleanupTick >= cleanupInterval) {
             VirtualBlockSystem.getInstance().cleanupExpired(currentTick);
             AccidentZoneMemory.getInstance().cleanupExpired(currentTick);
+            JunctionReservationManager.getInstance().cleanupExpired(currentTick);
+            // Also expire stale priority tokens
+            priorityTokens.entrySet().removeIf(e -> currentTick > e.getValue());
             lastVBSCleanupTick = currentTick;
         }
 
@@ -91,7 +149,7 @@ public class TrainAIManager {
 
         try {
             Class<?> createClass = Class.forName("com.simibubi.create.Create");
-            CreateRailwayMod.LOGGER.info("[AI Manager] Found Create Mod main class");
+            CreateRailwayMod.aiLog("[AI Manager] Found Create Mod main class");
 
             // Try known field names for the railway manager
             for (String fieldName : new String[]{"RAILWAYS", "railways"}) {
@@ -99,7 +157,7 @@ public class TrainAIManager {
                     Field f = createClass.getField(fieldName);
                     railwayManagerRef = f.get(null);
                     if (railwayManagerRef != null) {
-                        CreateRailwayMod.LOGGER.info("[AI Manager] Found railway manager via field '{}'", fieldName);
+                        CreateRailwayMod.aiLog("[AI Manager] Found railway manager via field '{}'", fieldName);
                         break;
                     }
                 } catch (NoSuchFieldException ignored) {}
@@ -113,7 +171,7 @@ public class TrainAIManager {
                         f.setAccessible(true);
                         railwayManagerRef = f.get(null);
                         if (railwayManagerRef != null) {
-                            CreateRailwayMod.LOGGER.info("[AI Manager] Found railway manager via declared field '{}' (type: {})",
+                            CreateRailwayMod.aiLog("[AI Manager] Found railway manager via declared field '{}' (type: {})",
                                     f.getName(), f.getType().getSimpleName());
                             break;
                         }
@@ -122,9 +180,9 @@ public class TrainAIManager {
             }
 
             if (railwayManagerRef == null) {
-                CreateRailwayMod.LOGGER.warn("[AI Manager] Could not find railway manager. Create class fields:");
+                CreateRailwayMod.aiWarn("[AI Manager] Could not find railway manager. Create class fields:");
                 for (Field f : createClass.getDeclaredFields()) {
-                    CreateRailwayMod.LOGGER.warn("  - {} : {} (static={})",
+                    CreateRailwayMod.aiWarn("  - {} : {} (static={})",
                             f.getName(), f.getType().getSimpleName(),
                             java.lang.reflect.Modifier.isStatic(f.getModifiers()));
                 }
@@ -137,7 +195,7 @@ public class TrainAIManager {
             for (String fieldName : new String[]{"trains", "trainMap"}) {
                 try {
                     trainsField = managerClass.getField(fieldName);
-                    CreateRailwayMod.LOGGER.info("[AI Manager] Found trains map via field '{}'", fieldName);
+                    CreateRailwayMod.aiLog("[AI Manager] Found trains map via field '{}'", fieldName);
                     break;
                 } catch (NoSuchFieldException ignored) {}
             }
@@ -152,7 +210,7 @@ public class TrainAIManager {
                             Object firstKey = map.keySet().iterator().next();
                             if (firstKey instanceof UUID) {
                                 trainsField = f;
-                                CreateRailwayMod.LOGGER.info("[AI Manager] Found trains map via declared field '{}' ({} entries)",
+                                CreateRailwayMod.aiLog("[AI Manager] Found trains map via declared field '{}' ({} entries)",
                                         f.getName(), map.size());
                                 break;
                             }
@@ -162,19 +220,19 @@ public class TrainAIManager {
             }
 
             if (trainsField == null) {
-                CreateRailwayMod.LOGGER.warn("[AI Manager] Could not find trains map. Manager fields:");
+                CreateRailwayMod.aiWarn("[AI Manager] Could not find trains map. Manager fields:");
                 for (Field f : managerClass.getDeclaredFields()) {
-                    CreateRailwayMod.LOGGER.warn("  - {} : {}", f.getName(), f.getType().getSimpleName());
+                    CreateRailwayMod.aiWarn("  - {} : {}", f.getName(), f.getType().getSimpleName());
                 }
                 createModAvailable = false;
                 return;
             }
 
             reflectionReady = true;
-            CreateRailwayMod.LOGGER.info("[AI Manager] Reflection setup complete");
+            CreateRailwayMod.aiLog("[AI Manager] Reflection setup complete");
 
         } catch (ClassNotFoundException e) {
-            CreateRailwayMod.LOGGER.warn("[AI Manager] Create Mod not found — AI system disabled");
+            CreateRailwayMod.aiWarn("[AI Manager] Create Mod not found — AI system disabled");
             createModAvailable = false;
         } catch (Exception e) {
             CreateRailwayMod.LOGGER.error("[AI Manager] Reflection init error: {}", e.getMessage());
@@ -204,13 +262,19 @@ public class TrainAIManager {
             Map<UUID, ?> createTrains = (Map<UUID, ?>) trainsField.get(railwayManagerRef);
             if (createTrains == null || createTrains.isEmpty()) {
                 if (!controllers.isEmpty()) {
-                    controllers.keySet().forEach(id -> VirtualBlockSystem.getInstance().releaseAll(id));
+                    controllers.keySet().forEach(id -> {
+                        VirtualBlockSystem.getInstance().releaseAll(id);
+                        StoppedTrainRegistry.getInstance().remove(id);
+                        MovingTrainRegistry.getInstance().remove(id);
+                        JunctionReservationManager.getInstance().releaseAll(id);
+                    });
                     controllers.clear();
                 }
                 return;
             }
 
             // Add controllers for new trains
+            EcosystemRegistry eco = EcosystemRegistry.getInstance();
             Set<UUID> activeIds = new HashSet<>();
             for (Map.Entry<UUID, ?> entry : createTrains.entrySet()) {
                 UUID id = entry.getKey();
@@ -220,17 +284,24 @@ public class TrainAIManager {
                     TrainAIController controller = new TrainAIController(id);
                     controller.bindCreateTrain(entry.getValue());
                     controllers.put(id, controller);
-                    CreateRailwayMod.LOGGER.info("[AI Manager] Attached AI to train {}", id.toString().substring(0, 8));
+                    CreateRailwayMod.aiLog("[AI Manager] Attached AI to train {}", id.toString().substring(0, 8));
                 } else {
                     controllers.get(id).bindCreateTrain(entry.getValue());
                 }
+                // v1.0.5: Register in EcosystemRegistry for PerceptionEngine + PlayerTrainHandle
+                eco.getOrCreateAiHandle(id, entry.getValue());
             }
 
             // Remove controllers for removed trains
             controllers.keySet().removeIf(id -> {
                 if (!activeIds.contains(id)) {
                     VirtualBlockSystem.getInstance().releaseAll(id);
-                    CreateRailwayMod.LOGGER.info("[AI Manager] Detached AI from train {}", id.toString().substring(0, 8));
+                    StoppedTrainRegistry.getInstance().remove(id);
+                    MovingTrainRegistry.getInstance().remove(id);
+                    JunctionReservationManager.getInstance().releaseAll(id);
+                    // v1.0.5: Remove from EcosystemRegistry
+                    eco.removeTrainHandle(id);
+                    CreateRailwayMod.aiLog("[AI Manager] Detached AI from train {}", id.toString().substring(0, 8));
                     return true;
                 }
                 return false;
@@ -245,13 +316,17 @@ public class TrainAIManager {
     private void logDiagnostics() {
         if (controllers.isEmpty()) return;
 
-        CreateRailwayMod.LOGGER.info("[AI Diagnostics] Tracking {} trains, {} VBS reservations, {} accident zones",
+        CreateRailwayMod.aiLog("[AI Diagnostics] Tracking {} trains, {} VBS, {} accident zones, {} priority tokens, {} stopped + {} moving, {} junction locks",
                 controllers.size(),
                 VirtualBlockSystem.getInstance().getActiveReservationCount(),
-                AccidentZoneMemory.getInstance().getActiveZoneCount());
+                AccidentZoneMemory.getInstance().getActiveZoneCount(),
+                priorityTokens.size(),
+                StoppedTrainRegistry.getInstance().size(),
+                MovingTrainRegistry.getInstance().size(),
+                JunctionReservationManager.getInstance().size());
 
         for (TrainAIController ctrl : controllers.values()) {
-            CreateRailwayMod.LOGGER.info("  {}", ctrl);
+            CreateRailwayMod.aiLog("  {}", ctrl);
         }
     }
 
@@ -273,6 +348,9 @@ public class TrainAIManager {
         TrainAIController removed = controllers.remove(trainId);
         if (removed != null) {
             VirtualBlockSystem.getInstance().releaseAll(trainId);
+            StoppedTrainRegistry.getInstance().remove(trainId);
+            MovingTrainRegistry.getInstance().remove(trainId);
+            JunctionReservationManager.getInstance().releaseAll(trainId);
         }
     }
 }

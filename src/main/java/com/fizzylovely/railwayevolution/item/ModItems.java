@@ -1,39 +1,49 @@
 package com.fizzylovely.railwayevolution.item;
 
 import com.fizzylovely.railwayevolution.CreateRailwayMod;
-import net.minecraft.sounds.SoundEvent;
-import net.minecraft.sounds.SoundEvents;
+import net.minecraft.core.Holder;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.ArmorItem;
 import net.minecraft.world.item.ArmorMaterial;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.item.crafting.Ingredient;
-import net.minecraftforge.registries.DeferredRegister;
-import net.minecraftforge.registries.ForgeRegistries;
-import net.minecraftforge.registries.RegistryObject;
+import net.neoforged.neoforge.registries.DeferredRegister;
+import net.neoforged.neoforge.registries.DeferredHolder;
 
-import javax.annotation.Nonnull;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Item registry for Create: Railway Evolution.
  * Register via DeferredRegister on the mod event bus.
+ *
+ * NeoForge 1.21.1: ArmorMaterial is now a Record registered via DeferredRegister.
  */
-@SuppressWarnings("null")
 public class ModItems {
 
     public static final DeferredRegister<Item> ITEMS =
-            DeferredRegister.create(ForgeRegistries.ITEMS, CreateRailwayMod.MOD_ID);
+            DeferredRegister.create(BuiltInRegistries.ITEM, CreateRailwayMod.MOD_ID);
+
+    public static final DeferredRegister<ArmorMaterial> ARMOR_MATERIALS =
+            DeferredRegister.create(BuiltInRegistries.ARMOR_MATERIAL, CreateRailwayMod.MOD_ID);
 
     /** Minimal ArmorMaterial for the AI Goggles (helmet-only, no real protection). */
-    private static final ArmorMaterial GOGGLES_MATERIAL = new ArmorMaterial() {
-        @Override public int getDurabilityForType(@Nonnull ArmorItem.Type type) { return 150; }
-        @Override public int getDefenseForType(@Nonnull ArmorItem.Type type) { return 0; }
-        @Override public int getEnchantmentValue() { return 0; }
-        @Override public SoundEvent getEquipSound() { return SoundEvents.ARMOR_EQUIP_LEATHER; }
-        @Override public Ingredient getRepairIngredient() { return Ingredient.EMPTY; }
-        @Override public String getName() { return "create_railway_goggles"; }
-        @Override public float getToughness() { return 0; }
-        @Override public float getKnockbackResistance() { return 0; }
-    };
+    public static final DeferredHolder<ArmorMaterial, ArmorMaterial> GOGGLES_MATERIAL =
+            ARMOR_MATERIALS.register("goggles_material", () -> {
+                Map<ArmorItem.Type, Integer> defense = new EnumMap<>(ArmorItem.Type.class);
+                for (ArmorItem.Type type : ArmorItem.Type.values()) {
+                    defense.put(type, 0);
+                }
+                return new ArmorMaterial(
+                        defense,
+                        0,               // enchantmentValue
+                        net.minecraft.sounds.SoundEvents.ARMOR_EQUIP_LEATHER,
+                        () -> net.minecraft.world.item.crafting.Ingredient.EMPTY,
+                        List.of(),       // layers (empty = no texture)
+                        0.0f,            // toughness
+                        0.0f             // knockbackResistance
+                );
+            });
 
     /**
      * AI Debug Goggles — when worn in the helmet slot, shows:
@@ -41,7 +51,7 @@ public class ModItems {
      *   - VBS track occupation (FLAME particles at reserved segment midpoints)
      *   - Action-bar text with state/speed info for all trains within 141 blocks
      */
-    public static final RegistryObject<Item> AI_GOGGLES =
+    public static final DeferredHolder<Item, Item> AI_GOGGLES =
             ITEMS.register("ai_goggles",
                     () -> new ArmorItem(GOGGLES_MATERIAL, ArmorItem.Type.HELMET,
                             new Item.Properties().stacksTo(1)));

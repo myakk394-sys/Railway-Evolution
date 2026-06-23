@@ -1,0 +1,62 @@
+# See https://docs.neoforged.net/docs/gettingstarted/modfiles/#neoforgemodstoml
+
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "All Rights Reserved"
+
+[[mods]]
+    modId = "create_railway"
+    version = "1.0.6"
+    displayName = "Create: Railway Evolution — Vanilla Edition"
+    logoFile = "logo.png"
+    authors = "Fizzy_lovely"
+    description = '''Your Create trains just got a brain.
+
+Railway Evolution gives every train on your network its own AI — they detect
+each other, negotiate right-of-way, and keep traffic flowing without signals
+or player intervention.
+
+Features:
+- Smooth graduated braking — trains approach each other like they actually
+  care about their cargo
+- Smart junction rerouting — stuck at a switch? The AI finds the free branch
+  and takes it
+- Player safety — trains detect players on tracks, warn with a whistle,
+  and stop before hitting them
+- Parallel track awareness — trains on adjacent lines don't interfere with
+  each other
+- Depot & station detection — parked trains are treated gently, not as walls
+
+Works on top of Create 0.6+ / 6.0 with zero config required.
+For best results: give your trains a schedule and let the AI handle the rest.
+
+only on modrinth https://modrinth.com/mod/railway-evolution and 
+on github https://github.com/myakk394-sys/Railway-Evolution/tree/1.20.1-forge
+
+Found a bug? Send a report with an attached screenshot or photo to:
+1xcodeteam@gmail.com
+
+This mod is developed by a single person — Fizzy_lovely.
+I can't do everything at once, so please be patient and understanding. Thank you!
+'''
+
+[[dependencies.create_railway]]
+    modId = "neoforge"
+    type = "required"
+    versionRange = "[21.1,)"
+    ordering = "NONE"
+    side = "BOTH"
+
+[[dependencies.create_railway]]
+    modId = "minecraft"
+    type = "required"
+    versionRange = "[1.21.1,1.22)"
+    ordering = "NONE"
+    side = "BOTH"
+
+[[dependencies.create_railway]]
+    modId = "create"
+    type = "optional"
+    versionRange = "[6.0,)"
+    ordering = "AFTER"
+    side = "BOTH"

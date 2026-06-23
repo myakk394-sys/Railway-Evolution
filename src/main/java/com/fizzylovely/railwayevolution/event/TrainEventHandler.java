@@ -4,20 +4,18 @@ import com.fizzylovely.railwayevolution.CreateRailwayMod;
 import com.fizzylovely.railwayevolution.ai.TrainAIManager;
 import com.fizzylovely.railwayevolution.command.RailwayAICommand;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraftforge.event.RegisterCommandsEvent;
-import net.minecraftforge.event.TickEvent;
-import net.minecraftforge.event.server.ServerStoppedEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
- * Forge event handler — hooks into the server tick to drive the AI system.
+ * NeoForge event handler — hooks into the server tick to drive the AI system.
  */
 public class TrainEventHandler {
 
     @SubscribeEvent
-    public void onServerTick(TickEvent.ServerTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) return;
-
+    public void onServerTickEnd(ServerTickEvent.Post event) {
         TrainAIManager manager = TrainAIManager.getInstance();
         if (manager == null) return;
 
@@ -30,7 +28,7 @@ public class TrainEventHandler {
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         RailwayAICommand.register(event.getDispatcher());
-        CreateRailwayMod.LOGGER.info("[Railway Evolution] Registered /railwayai command");
+        CreateRailwayMod.LOGGER.info("[Railway Evolution] Registered /railway and /railwayai commands");
     }
 
     @SubscribeEvent
