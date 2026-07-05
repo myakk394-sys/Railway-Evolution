@@ -23,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
+ * Copyright (c) 2026 Fizzy. Licensed under the CC-BY-NC-4.0 License.
  * See LICENSE file in the project root for full license information.
  *
  * Train AI Controller — the "brain" of a single train.
