@@ -65,27 +65,26 @@ public class VirtualBlockSystem {
     public ReservationResult tryReserve(UUID trainId, BlockPos segmentStart, BlockPos segmentEnd,
                                          boolean forward, long currentTick) {
         long ttl = RailwayConfig.reservationTTLTicks.get();
-
-        TrackReservation newReservation = new TrackReservation(
-                trainId, segmentStart, segmentEnd, forward, currentTick, ttl);
-        String key = newReservation.getSegmentKey();
+        String key = makeSegmentKey(segmentStart, segmentEnd);
 
         TrackReservation existing = reservations.get(key);
 
         // Segment is free or reservation expired
         if (existing == null || existing.isExpired(currentTick) || !existing.isActive()) {
+            TrackReservation newReservation = new TrackReservation(
+                    trainId, segmentStart, segmentEnd, forward, currentTick, ttl);
             commitReservation(key, newReservation, trainId);
             return ReservationResult.GRANTED;
         }
 
-        // Same train renewing its own reservation
+        // Same train renewing its own reservation — most common hot path, no new object
         if (existing.getOwnerTrainId().equals(trainId)) {
             existing.renew(currentTick, ttl);
             return ReservationResult.GRANTED;
         }
 
-        // Conflict with another train
-        if (newReservation.isHeadOnConflict(existing)) {
+        // Conflict with another train — check head-on by comparing directions
+        if (existing.isForward() != forward) {
             CreateRailwayMod.LOGGER.debug("[VBS] HEAD-ON conflict: train {} vs {} on segment {}",
                     trainId.toString().substring(0, 8),
                     existing.getOwnerTrainId().toString().substring(0, 8), key);
@@ -148,8 +147,7 @@ public class VirtualBlockSystem {
      * Release a specific segment reservation if owned by the given train.
      */
     public void releaseSegment(UUID trainId, BlockPos segmentStart, BlockPos segmentEnd) {
-        TrackReservation temp = new TrackReservation(trainId, segmentStart, segmentEnd, true, 0, 0);
-        String key = temp.getSegmentKey();
+        String key = makeSegmentKey(segmentStart, segmentEnd);
 
         TrackReservation existing = reservations.get(key);
         if (existing != null && existing.getOwnerTrainId().equals(trainId)) {
@@ -167,8 +165,7 @@ public class VirtualBlockSystem {
      * Check if a segment is currently reserved by any train.
      */
     public boolean isSegmentReserved(BlockPos segmentStart, BlockPos segmentEnd, long currentTick) {
-        TrackReservation temp = new TrackReservation(UUID.randomUUID(), segmentStart, segmentEnd, true, 0, 0);
-        String key = temp.getSegmentKey();
+        String key = makeSegmentKey(segmentStart, segmentEnd);
         TrackReservation existing = reservations.get(key);
         return existing != null && existing.isActive() && !existing.isExpired(currentTick);
     }
@@ -178,8 +175,7 @@ public class VirtualBlockSystem {
      * Returns null if the segment is free.
      */
     public UUID getSegmentOwner(BlockPos segmentStart, BlockPos segmentEnd, long currentTick) {
-        TrackReservation temp = new TrackReservation(UUID.randomUUID(), segmentStart, segmentEnd, true, 0, 0);
-        String key = temp.getSegmentKey();
+        String key = makeSegmentKey(segmentStart, segmentEnd);
         TrackReservation existing = reservations.get(key);
         if (existing != null && existing.isActive() && !existing.isExpired(currentTick)) {
             return existing.getOwnerTrainId();

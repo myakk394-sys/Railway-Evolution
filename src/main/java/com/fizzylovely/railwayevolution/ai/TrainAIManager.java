@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerLevel;
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.IdentityHashMap;
 
 /**
  * Train AI Manager — global singleton managing all train AI controllers.
@@ -26,6 +27,9 @@ public class TrainAIManager {
     private long lastVBSCleanupTick = 0;
     private long lastTrainScanTick = 0;
     private long lastDiagnosticTick = 0;
+
+    // v1.0.7: Global per-tick scan maps — built once in buildScanMaps(), consumed by all controllers
+    private final TrainScanMaps scanMaps = new TrainScanMaps();
 
     // ── Global Priority Registry ──
     // When a train has been starved (yielded too many times consecutively) it
@@ -112,6 +116,11 @@ public class TrainAIManager {
         if (currentTick % 20 == 0) {
             eco.scanPlayerControls(level);
         }
+
+        // v1.0.7: Build global scan maps BEFORE controller ticks.
+        // One O(n) pass replaces the 3×n per-controller loops that were in graphWalkScan().
+        // Controllers read the pre-built maps via getScanMaps() → O(1) lookups.
+        buildScanMaps();
 
         // Tick all AI controllers
         for (TrainAIController controller : controllers.values()) {
@@ -293,7 +302,6 @@ public class TrainAIManager {
             }
 
             // Remove controllers for removed trains
-            EcosystemRegistry ecoForRemoval = EcosystemRegistry.getInstance();
             controllers.keySet().removeIf(id -> {
                 if (!activeIds.contains(id)) {
                     VirtualBlockSystem.getInstance().releaseAll(id);
@@ -301,7 +309,7 @@ public class TrainAIManager {
                     MovingTrainRegistry.getInstance().remove(id);
                     JunctionReservationManager.getInstance().releaseAll(id);
                     // v1.0.5: Remove from EcosystemRegistry
-                    ecoForRemoval.removeTrainHandle(id);
+                    eco.removeTrainHandle(id);
                     CreateRailwayMod.aiLog("[AI Manager] Detached AI from train {}", id.toString().substring(0, 8));
                     return true;
                 }
@@ -337,6 +345,11 @@ public class TrainAIManager {
         return Collections.unmodifiableCollection(controllers.values());
     }
 
+    /** v1.0.7: Pre-built global scan maps (never null). */
+    public TrainScanMaps getScanMaps() {
+        return scanMaps;
+    }
+
     public TrainAIController getController(UUID trainId) {
         return controllers.get(trainId);
     }
@@ -352,6 +365,52 @@ public class TrainAIManager {
             StoppedTrainRegistry.getInstance().remove(trainId);
             MovingTrainRegistry.getInstance().remove(trainId);
             JunctionReservationManager.getInstance().releaseAll(trainId);
+        }
+    }
+
+    /**
+     * v1.0.7: Build global scan maps in a single O(n) pass.
+     * Populates edgeToTrain, reverseEdgeMap, and junctionApproachMap
+     * from ALL controllers. Per-train filtering (self, bypass, etc.)
+     * is deferred to query time in TrainAIController.filterGlobalHit().
+     *
+     * Called once per tick BEFORE controller ticks. Uses data from the
+     * PREVIOUS tick (controllers haven't called updateTrainData yet),
+     * which is acceptable: trains move ≤1.4 blocks/tick and the
+     * ultra-close emergency scan runs per-tick regardless.
+     */
+    private void buildScanMaps() {
+        scanMaps.clear();
+
+        for (TrainAIController ctrl : controllers.values()) {
+            // ── edgeToTrain: leading + trailing edge → controller ──
+            Object leadEdge = ctrl.getLeadingEdge();
+            Object trailEdge = ctrl.getTrailingEdge();
+            if (leadEdge != null)
+                scanMaps.edgeToTrain.putIfAbsent(leadEdge, ctrl);
+            if (trailEdge != null)
+                scanMaps.edgeToTrain.putIfAbsent(trailEdge, ctrl);
+
+            // ── reverseEdgeMap: pre-computed reverse edge → controller ──
+            // Each controller computes myReverseLeadingEdge in readTrackGraphData().
+            // This is the edge(node2→node1) — the reverse of their forward direction.
+            // When our BFS walks edge(node1→node2), this map detects head-on trains.
+            Object revEdge = ctrl.getReverseLeadingEdge();
+            if (revEdge != null)
+                scanMaps.reverseEdgeMap.putIfAbsent(revEdge, ctrl);
+
+            // ── junctionApproachMap: node2 → controller approaching that junction ──
+            // Only include if the controller's leading edge is NOT already in edgeToTrain
+            // (avoids double-counting trains already detectable via edge-based BFS).
+            Object node2 = ctrl.getLeadingNode2();
+            if (node2 != null && leadEdge != null && ctrl.getCurrentPosition() != null) {
+                if (!scanMaps.edgeToTrain.containsKey(leadEdge)
+                        || scanMaps.edgeToTrain.get(leadEdge) == ctrl) {
+                    // Use putIfAbsent — first train registered at this junction wins.
+                    // BFS applies distance-based tiebreaking at query time anyway.
+                    scanMaps.junctionApproachMap.putIfAbsent(node2, ctrl);
+                }
+            }
         }
     }
 }

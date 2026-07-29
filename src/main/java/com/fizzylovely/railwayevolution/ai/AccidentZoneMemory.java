@@ -111,7 +111,7 @@ public class AccidentZoneMemory {
      * @return Distance to the nearest active zone, or -1 if none found
      */
     public double distanceToNearestZone(BlockPos pos, UUID ignoredTrainId, long currentTick) {
-        double closest = -1;
+        double closestSq = -1;
         for (Zone zone : zones.values()) {
             if (zone.expiryTick < currentTick) continue;
             if (ignoredTrainId != null && ignoredTrainId.equals(zone.registeredBy)) continue;
@@ -119,12 +119,12 @@ public class AccidentZoneMemory {
             double dx = pos.getX() - zone.pos.getX();
             double dy = pos.getY() - zone.pos.getY();
             double dz = pos.getZ() - zone.pos.getZ();
-            double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist <= ZONE_RADIUS) {
-                if (closest < 0 || dist < closest) closest = dist;
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq <= ZONE_RADIUS * ZONE_RADIUS) {
+                if (closestSq < 0 || distSq < closestSq) closestSq = distSq;
             }
         }
-        return closest;
+        return closestSq < 0 ? -1 : Math.sqrt(closestSq);
     }
 
     /**

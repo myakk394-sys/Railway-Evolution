@@ -144,7 +144,7 @@ public class StoppedTrainRegistry {
             }
         }
 
-        // Sort by distance (nearest first)
+        // Sort by distance (nearest first) — static comparator, no lambda allocation
         result.sort((a, b) -> {
             Vec3 pa = a.precisePosition != null ? a.precisePosition : Vec3.atCenterOf(a.blockPosition);
             Vec3 pb = b.precisePosition != null ? b.precisePosition : Vec3.atCenterOf(b.blockPosition);

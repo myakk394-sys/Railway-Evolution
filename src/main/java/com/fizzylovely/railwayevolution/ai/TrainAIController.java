@@ -23,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 
- * Copyright (c) 2026 Fizzy. Licensed under the CC-BY-NC-4.0 License.
+ * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  * See LICENSE file in the project root for full license information.
  *
  * Train AI Controller — the "brain" of a single train.
@@ -279,6 +279,10 @@ public class TrainAIController {
     private Object myLastLeadingNode1;
     private Object myLastLeadingNode2;
     private double myLeadingEdgePos; // TravellingPoint.position on leading edge
+    // v1.0.7: Pre-computed reverse edge (edge from myLeadingNode2 → myLeadingNode1).
+    // Stored per-controller so TrainAIManager.buildScanMaps() can populate reverseEdgeMap
+    // without calling invokeGetConnectionsFrom() per-train (avoids O(n) reflection in manager).
+    Object myReverseLeadingEdge;
     private double graphDistanceToObstacle = -1; // graph distance (blocks), -1 = n/a
     private boolean graphScanActive; // true if last detection was via graph walk
 
@@ -1549,7 +1553,7 @@ public class TrainAIController {
                             Object firstCarriage = carriages.get(0);
                             // Carriage.getLeadingPoint() → TravellingPoint
                             try {
-                                java.lang.reflect.Method getLP = firstCarriage.getClass().getMethod("getLeadingPoint");
+                                java.lang.reflect.Method getLP = findMethod(firstCarriage.getClass(), "getLeadingPoint");
                                 Object leadTP = getLP.invoke(firstCarriage);
                                 if (leadTP != null) {
                                     Field blockedF = findField(leadTP.getClass(), "blocked");
@@ -1832,6 +1836,18 @@ public class TrainAIController {
             }
             if (myLeadingNode2 == null && myLastLeadingNode2 != null) {
                 myLeadingNode2 = myLastLeadingNode2;
+            }
+
+            // v1.0.7: Pre-compute reverse edge for global scan maps.
+            // The reverse of our forward edge (node1→node2) is the edge (node2→node1).
+            // Used by TrainAIManager.buildScanMaps() to populate reverseEdgeMap in O(1).
+            myReverseLeadingEdge = null;
+            if (myLeadingNode1 != null && myLeadingNode2 != null && myLeadingEdge != null) {
+                initGraphWalkReflection(); // ensure getConnectionsFromMethod is ready
+                Map<Object, Object> revConns = invokeGetConnectionsFrom(myLeadingNode2);
+                if (revConns != null) {
+                    myReverseLeadingEdge = revConns.get(myLeadingNode1);
+                }
             }
         } catch (Exception e) {
             CreateRailwayMod.aiDebug("[AI] TrackGraph read failed for {}: {}",
@@ -2980,109 +2996,25 @@ public class TrainAIController {
 
         graphScanRan = true; // BFS has valid data — its result is authoritative
 
-        // Build edge → train lookup (identity-based map: same Java object = same
-        // directed edge)
-        IdentityHashMap<Object, TrainAIController> edgeToTrain = new IdentityHashMap<>();
-        for (TrainAIController other : manager.getAllControllers()) {
-            if (other.trainId.equals(this.trainId))
-                continue;
-            if (other.currentPosition == null)
-                continue;
-            if (bypassingTrainId != null && other.trainId.equals(bypassingTrainId))
-                continue;
-            // v5.3: Skip trains yielding TO US — they're invisible
-            if (other.junctionYieldingToId != null
-                    && other.junctionYieldingToId.equals(this.trainId))
-                continue;
-            // Y-level filter
-            if (currentPosition != null) {
-                int dy = Math.abs(currentPosition.getY() - other.currentPosition.getY());
-                if (dy > 10)
-                    continue;
-            }
-            if (other.myLeadingEdge != null)
-                edgeToTrain.putIfAbsent(other.myLeadingEdge, other);
-            if (other.myTrailingEdge != null)
-                edgeToTrain.putIfAbsent(other.myTrailingEdge, other);
-        }
+        // v1.0.7: Use pre-built global scan maps from TrainAIManager (O(1) lookup).
+        // Old code built 3 local maps here with 3 separate O(n) loops per controller.
+        // Now a single O(n) loop runs once per tick in TrainAIManager.buildScanMaps().
+        // Per-train filters (self, bypass, junction yielding, Y-level) are applied at
+        // each query point via filterGlobalHit() instead of at build time.
+        TrainScanMaps scanMaps = manager.getScanMaps();
+        IdentityHashMap<Object, TrainAIController> edgeToTrain = scanMaps.edgeToTrain;
+        IdentityHashMap<Object, TrainAIController> reverseEdgeMap = scanMaps.reverseEdgeMap;
+        IdentityHashMap<Object, TrainAIController> junctionApproachMap = scanMaps.junctionApproachMap;
 
-        // Build reverse-edge map for head-on (oncoming) detection.
-        // Create uses DIRECTED edges: edge(A→B) ≠ edge(B→A). A train traveling B→A
-        // has myLeadingEdge = edge(B→A). Our BFS walks edge(A→B). Without this map,
-        // BFS never finds head-on trains → collisions.
-        // For each other train on edge(N1→N2), find the reverse edge(N2→N1) via
-        // getConnectionsFrom(N2).get(N1). Map that reverse edge to the train.
-        IdentityHashMap<Object, TrainAIController> reverseEdgeMap = new IdentityHashMap<>();
-        for (TrainAIController other : manager.getAllControllers()) {
-            if (other.trainId.equals(this.trainId))
-                continue;
-            if (other.myLeadingNode1 == null || other.myLeadingNode2 == null)
-                continue;
-            if (other.myLeadingEdge == null)
-                continue;
-            if (bypassingTrainId != null && other.trainId.equals(bypassingTrainId))
-                continue;
-            // v5.3: Skip trains yielding TO US
-            if (other.junctionYieldingToId != null
-                    && other.junctionYieldingToId.equals(this.trainId))
-                continue;
-            Map<Object, Object> revConns = invokeGetConnectionsFrom(other.myLeadingNode2);
-            if (revConns != null) {
-                Object revEdge = revConns.get(other.myLeadingNode1);
-                if (revEdge != null)
-                    reverseEdgeMap.putIfAbsent(revEdge, other);
-            }
-        }
-
-        // Build junction-convergence map: node → train approaching from a SIDE branch.
-        // When train B is on a branch whose myLeadingNode2 is a junction node on OUR
-        // route,
-        // B will physically arrive at that junction and merge onto our track —
-        // collision risk.
-        // Distinct from oval-end nodes: we only flag if B's edge is NOT in edgeToTrain
-        // (i.e. not on our own route edges) AND B is not behind us.
-        // Map: junctionNode → closest approaching side-branch train (physical dist as
-        // tiebreak).
-        IdentityHashMap<Object, TrainAIController> junctionApproachMap = new IdentityHashMap<>();
-        IdentityHashMap<Object, Double> junctionApproachDist = new IdentityHashMap<>();
-        for (TrainAIController other : manager.getAllControllers()) {
-            if (other.trainId.equals(this.trainId))
-                continue;
-            if (bypassingTrainId != null && other.trainId.equals(bypassingTrainId))
-                continue;
-            // v5.3: Skip trains yielding TO US
-            if (other.junctionYieldingToId != null
-                    && other.junctionYieldingToId.equals(this.trainId))
-                continue;
-            if (other.myLeadingNode2 == null || other.myLeadingEdge == null)
-                continue;
-            if (other.currentPosition == null)
-                continue;
-            // Skip if this train is already captured in edgeToTrain (on our route edge)
-            if (edgeToTrain.containsKey(other.myLeadingEdge))
-                continue;
-            // Y-level filter
-            if (currentPosition != null) {
-                int dy = Math.abs(currentPosition.getY() - other.currentPosition.getY());
-                if (dy > 10)
-                    continue;
-            }
-            double physDist = distanceBetween(this, other);
-            Object jNode = other.myLeadingNode2; // node this train is heading toward
-            Double existing = junctionApproachDist.get(jNode);
-            if (existing == null || physDist < existing) {
-                junctionApproachMap.put(jNode, other);
-                junctionApproachDist.put(jNode, physDist);
-            }
-        }
-
-        if (edgeToTrain.isEmpty() && reverseEdgeMap.isEmpty() && junctionApproachMap.isEmpty())
-            return null;
+        // v1.0.5.1 hotfix: do NOT early-exit when maps are empty.
+        // Junction reservation checks (Check 0/1/2 in BFS) must always run so
+        // a lone train doesn't get stopped by stale reservations or ghost trains.
+        // The BFS will simply find no obstacles and return null at the end.
 
         // ── Step 1: check if another train is AHEAD on our own leading edge ──
         // (Our own leading edge is always on our route — no side-track filter needed
         // here)
-        TrainAIController hit = edgeToTrain.get(myLeadingEdge);
+        TrainAIController hit = filterGlobalHit(edgeToTrain.get(myLeadingEdge));
         if (hit != null) {
             double posDiff = hit.myLeadingEdgePos - myLeadingEdgePos;
             // Old threshold: 0.5 blocks. That left a blindspot: trains on the SAME edge
@@ -3107,7 +3039,7 @@ public class TrainAIController {
         // ── Step 1b: head-on train on the REVERSE of our leading edge ──
         // Our edge is A→B; a head-on train is on B→A. The reverse of B→A is A→B
         // (our own leading edge), which is what reverseEdgeMap maps.
-        hit = reverseEdgeMap.get(myLeadingEdge);
+        hit = filterGlobalHit(reverseEdgeMap.get(myLeadingEdge));
         if (hit != null) {
             double edgeLenHere = getEdgeLength(myLeadingEdge);
             // We're at myLeadingEdgePos from A. Hit is at hit.myLeadingEdgePos from B (on
@@ -3175,7 +3107,7 @@ public class TrainAIController {
             // Guard: only fire if the node is a REAL junction (connectionsFrom has 2+
             // entries meaning multiple branches meet here). This skips simple curve nodes
             // where any two trains on parallel ovals both happen to target the end-node.
-            TrainAIController juncHit = junctionApproachMap.get(node);
+            TrainAIController juncHit = filterGlobalHit(junctionApproachMap.get(node));
             if (juncHit != null) {
                 Map<Object, Object> juncConns = invokeGetConnectionsFrom(node);
                 boolean isRealJunction = juncConns != null && juncConns.size() >= 2;
@@ -3325,12 +3257,14 @@ public class TrainAIController {
                     }
                 }
 
-                // ── Check 2 (v5.3): ANY train physically inside junction ──
-                // Blocks if ANY train is within 5 blocks of the junction center.
-                // This catches player-controlled trains, moving trains, stopped trains —
-                // everything. The mutex reservation (Check 0) handles who APPROACHES.
-                // This check prevents entering a junction that is physically occupied.
-                if (!graphJunctionNotEnoughSpace && jXZ != null
+                // ── Check 2 (v5.3, hotfix v1.0.5.1): stopped train physically inside junction ──
+                // Only fires when we do NOT already hold the reservation for this junction.
+                // If we hold the reservation, we have right-of-way — skip this check entirely.
+                // Also: only block on STOPPED trains (speed < 0.12). Moving trains clear in 1-2 ticks
+                // and blocking on them causes the 2-3s false-stop at every junction exit.
+                boolean weHoldThisJunc = (lastReservedJunctionKey != -1 && jXZ != null
+                        && lastReservedJunctionKey == JunctionReservationManager.packKey(jXZ[0], jXZ[1]));
+                if (!graphJunctionNotEnoughSpace && !weHoldThisJunc && jXZ != null
                         && dist <= juncBrakeDist && currentPosition != null) {
                     TrainAIManager jMgr = TrainAIManager.getInstance();
                     if (jMgr != null) {
@@ -3341,6 +3275,8 @@ public class TrainAIController {
                                     && other.junctionYieldingToId.equals(this.trainId)) continue;
                             if (other.currentPosition == null) continue;
                             if (myGraph != null && other.myGraph != null && myGraph != other.myGraph) continue;
+                            // v1.0.5.1: skip trains moving at speed — they'll clear in 1-2 ticks
+                            if (other.currentSpeed > 0.12) continue;
                             int dyo = Math.abs(currentPosition.getY() - other.currentPosition.getY());
                             if (dyo > 6) continue;
 
@@ -3348,11 +3284,11 @@ public class TrainAIController {
                             double ddz = other.currentPosition.getZ() - jXZ[1];
                             double otherDistToJunc = Math.sqrt(ddx * ddx + ddz * ddz);
 
-                            // Block if ANY train is physically inside junction (≤ 5 blocks)
-                            if (otherDistToJunc <= 5.0) {
+                            // Block if a STOPPED train is physically inside junction (≤ 4 blocks)
+                            if (otherDistToJunc <= 4.0) {
                                 graphJunctionNotEnoughSpace = true;
                                 CreateRailwayMod.aiDebug(
-                                        "[AI] Train {} junction occupied by {} (d={}b, spd={})",
+                                        "[AI] Train {} junction occupied by stopped {} (d={}b, spd={})",
                                         trainId.toString().substring(0, 8),
                                         other.trainId.toString().substring(0, 8),
                                         (int) otherDistToJunc,
@@ -3410,7 +3346,7 @@ public class TrainAIController {
                 }
 
                 // Check if any train occupies this edge (same direction)
-                hit = edgeToTrain.get(nextEdge);
+                hit = filterGlobalHit(edgeToTrain.get(nextEdge));
                 if (hit != null) {
                     // Distance = accumulated rail dist + target's position on this edge
                     double totalDist = dist + hit.myLeadingEdgePos;
@@ -3426,7 +3362,7 @@ public class TrainAIController {
                 // Check for head-on (oncoming) train on the reverse of this edge.
                 // BFS edge goes node→nextNode. Oncoming train is on edge(nextNode→node).
                 // reverseEdgeMap maps edge(node→nextNode) to that oncoming train.
-                hit = reverseEdgeMap.get(nextEdge);
+                hit = filterGlobalHit(reverseEdgeMap.get(nextEdge));
                 if (hit != null) {
                     double revEdgeLen = getEdgeLength(nextEdge);
                     // Oncoming: train is hit.myLeadingEdgePos from their start (nextNode side).
@@ -5462,6 +5398,32 @@ public class TrainAIController {
     /** The underlying Create Train object (for schedule programming etc.). */
     public Object getCreateTrainRef() {
         return createTrainRef;
+    }
+
+    // ── v1.0.7: Getters for TrainAIManager.buildScanMaps() ──
+
+    /** Forward node (TravellingPoint.node2). May be null. */
+    public Object getLeadingNode2() { return myLeadingNode2; }
+
+    /** Pre-computed reverse edge (node2→node1). May be null. */
+    public Object getReverseLeadingEdge() { return myReverseLeadingEdge; }
+
+    /**
+     * Filter a global-map hit: returns null if the hit should be ignored
+     * by THIS train (self, bypass, junction yielding, Y-level).
+     * Called at each query point where the old per-train-filtered local maps
+     * have been replaced by global TrainScanMaps.
+     */
+    private TrainAIController filterGlobalHit(TrainAIController hit) {
+        if (hit == null) return null;
+        if (hit.trainId.equals(this.trainId)) return null;
+        if (bypassingTrainId != null && hit.trainId.equals(bypassingTrainId)) return null;
+        if (hit.junctionYieldingToId != null && hit.junctionYieldingToId.equals(this.trainId)) return null;
+        if (currentPosition != null && hit.currentPosition != null) {
+            int dy = Math.abs(currentPosition.getY() - hit.currentPosition.getY());
+            if (dy > 10) return null;
+        }
+        return hit;
     }
 
     @Override

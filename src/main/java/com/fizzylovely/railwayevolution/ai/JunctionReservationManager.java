@@ -1,6 +1,7 @@
 package com.fizzylovely.railwayevolution.ai;
 
 import com.fizzylovely.railwayevolution.CreateRailwayMod;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.Map;
 import java.util.UUID;
@@ -143,8 +144,14 @@ public class JunctionReservationManager {
             this.isGranted     = granted;
             this.ghostPassTarget = ghost;
         }
-        public static ReserveResult granted(UUID displacedTrain) { return new ReserveResult(true,  displacedTrain); }
-        public static ReserveResult denied (UUID holderTrain)    { return new ReserveResult(false, holderTrain); }
+
+        /** Cached instance for the most common case: granted with no displacement. */
+        private static final ReserveResult GRANTED_NO_GHOST = new ReserveResult(true, null);
+
+        public static ReserveResult granted(@Nullable UUID displacedTrain) {
+            return displacedTrain == null ? GRANTED_NO_GHOST : new ReserveResult(true, displacedTrain);
+        }
+        public static ReserveResult denied(UUID holderTrain) { return new ReserveResult(false, holderTrain); }
     }
 
     // ── Release ───────────────────────────────────────────────────────────────

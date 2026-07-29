@@ -49,6 +49,10 @@ public final class EcosystemRegistry {
     private final List<ITrainHandle> snapshot = new ArrayList<>();
     private boolean snapshotDirty = true;
 
+    /** Reused across scanPlayerControls() calls — avoids allocating new HashSet every 20 ticks. */
+    private final Set<UUID> stillControlledBuf = new HashSet<>();
+
+
     // ──────────────────────────────────────────────────────────────────────
 
     public static EcosystemRegistry getInstance() {
@@ -194,9 +198,8 @@ public final class EcosystemRegistry {
      * Тяжёлые данные обновляются только при изменении скорости.
      */
     public void tickRefreshAll(long currentTick) {
-        double prevSpeed;
         for (Create1211TrainHandle handle : aiHandles.values()) {
-            prevSpeed = handle.getSpeed();
+            double prevSpeed = handle.getSpeed();
             handle.refreshFast();
             double newSpeed = handle.getSpeed();
             if (Math.abs(newSpeed - prevSpeed) > 0.001 || currentTick % 10 == 0) {
@@ -210,7 +213,7 @@ public final class EcosystemRegistry {
      * Вызывается каждые N тиков из TrainAIManager.
      */
     public void scanPlayerControls(ServerLevel level) {
-        Set<UUID> stillControlled = new HashSet<>();
+        stillControlledBuf.clear();
 
         for (Map.Entry<UUID, Create1211TrainHandle> e : aiHandles.entrySet()) {
             UUID trainId = e.getKey();
@@ -232,18 +235,18 @@ public final class EcosystemRegistry {
                 if (found != null) {
                     playerUUID = found.getUUID();
                     updatePlayerControl(trainId, playerUUID, found);
-                    stillControlled.add(trainId);
+                    stillControlledBuf.add(trainId);
                 }
             } else {
                 net.minecraft.world.entity.player.Player raw = level.getPlayerByUUID(playerUUID);
                 ServerPlayer p = (raw instanceof ServerPlayer sp) ? sp : null;
                 updatePlayerControl(trainId, playerUUID, p);
-                stillControlled.add(trainId);
+                stillControlledBuf.add(trainId);
             }
         }
 
         // Удаляем устаревшие player handles
-        playerHandles.keySet().removeIf(id -> !stillControlled.contains(id));
+        playerHandles.keySet().removeIf(id -> !stillControlledBuf.contains(id));
     }
 
     @Nullable
