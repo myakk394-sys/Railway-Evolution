@@ -126,6 +126,12 @@ public final class PlayerTrainHandle implements ITrainHandle {
     @Override public @Nullable Object getLeadingNode2Ref() { return delegate.getLeadingNode2Ref(); }
     @Override public double           getLeadingEdgePosition() { return delegate.getLeadingEdgePosition(); }
 
+    // v1.0.8 Fix #10: Trailing edge delegation
+    @Override public @Nullable Object getTrailingEdgeRef()  { return delegate.getTrailingEdgeRef(); }
+    @Override public @Nullable Object getTrailingNode1Ref() { return delegate.getTrailingNode1Ref(); }
+    @Override public @Nullable Object getTrailingNode2Ref() { return delegate.getTrailingNode2Ref(); }
+    @Override public double           getTrailingEdgePosition() { return delegate.getTrailingEdgePosition(); }
+
     @Override public List<UUID> getOccupiedSignalGroups() { return delegate.getOccupiedSignalGroups(); }
 
     // ─── Вспомогательные ──────────────────────────────────────────────────

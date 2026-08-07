@@ -179,6 +179,32 @@ public interface ITrainHandle {
      */
     double getLeadingEdgePosition();
 
+    // v1.0.8 Fix #10: Trailing carriage graph data for PerceptionEngine
+
+    /**
+     * Идентификатор хвостового ребра (object identity).
+     * {@code null} если нет данных или одновагонный состав.
+     */
+    @Nullable
+    Object getTrailingEdgeRef();
+
+    /**
+     * Узел node1 хвостовой TravellingPoint.
+     */
+    @Nullable
+    Object getTrailingNode1Ref();
+
+    /**
+     * Узел node2 хвостовой TravellingPoint.
+     */
+    @Nullable
+    Object getTrailingNode2Ref();
+
+    /**
+     * Позиция на хвостовом ребре (0..edgeLength).
+     */
+    double getTrailingEdgePosition();
+
     /**
      * UUID занятых signal groups (для isOnSameTrack проверки).
      * Возвращает пустой список если нет данных.

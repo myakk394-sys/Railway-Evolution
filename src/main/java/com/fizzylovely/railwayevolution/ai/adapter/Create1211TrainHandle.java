@@ -64,6 +64,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
     private static VarHandle VH_TP_NODE2;
     private static VarHandle VH_TP_POSITION;
     private static VarHandle VH_TP_EDGE;
+    private static VarHandle VH_TP_BLOCKED;
 
     // TrackNode MethodHandle
     private static MethodHandle MH_NODE_LOCATION; // TrackNode.getLocation() → TrackNodeLocation
@@ -87,6 +88,8 @@ public final class Create1211TrainHandle implements ITrainHandle {
     private boolean cachedWaitSignal   = false;
     private double cachedDistToSignal  = Double.MAX_VALUE;
     private boolean cachedOnGraph      = false;
+    private boolean cachedBlocked      = false;
+    @Nullable private UUID cachedControllingPlayerId;
 
     // Позиционные данные (обновляются при обновлении графа)
     @Nullable private Vec3    cachedLeadingPos   = null;
@@ -95,6 +98,12 @@ public final class Create1211TrainHandle implements ITrainHandle {
     @Nullable private Object  cachedLeadNode1    = null;
     @Nullable private Object  cachedLeadNode2    = null;
     private double             cachedEdgePos      = 0;
+
+    // v1.0.8 Fix #10: Trailing carriage graph data
+    @Nullable private Object  cachedTrailEdge    = null;
+    @Nullable private Object  cachedTrailNode1   = null;
+    @Nullable private Object  cachedTrailNode2   = null;
+    private double             cachedTrailEdgePos = 0;
 
     // Граф-адаптер (переиспользуется)
     @Nullable private Create1211TrainGraph graphAdapter = null;
@@ -177,22 +186,15 @@ public final class Create1211TrainHandle implements ITrainHandle {
     }
 
     @Override public boolean isBlocked() {
-        // Определяем по отсутствию движения и наличию навигации с малым расстоянием
-        // (Create устанавливает blocked на Carriage, сложно читать без доп. рефлексии)
-        return cachedHasDest && cachedDistToDest < 0.1;
+        return cachedBlocked;
     }
 
     @Override public boolean isPlayerControlled() {
-        if (VH_MANUAL_TICK == null || createTrainRef == null) return cachedManualTick;
-        try {
-            Object val = VH_MANUAL_TICK.get(createTrainRef);
-            cachedManualTick = val instanceof Boolean b ? b : false;
-        } catch (Exception e) { /* fallback */ }
-        return cachedManualTick;
+        return cachedControllingPlayerId != null;
     }
 
     @Override public @Nullable UUID getControllingPlayerUUID() {
-        return null; // Определяется выше в старом коде через passenger scan
+        return cachedControllingPlayerId;
     }
 
     @Override public double getDistanceToDestination() { return cachedDistToDest; }
@@ -221,6 +223,12 @@ public final class Create1211TrainHandle implements ITrainHandle {
     @Override public @Nullable Object getLeadingNode2Ref()  { return cachedLeadNode2; }
     @Override public double getLeadingEdgePosition()        { return cachedEdgePos; }
 
+    // v1.0.8 Fix #10: Trailing edge getters
+    @Override public @Nullable Object getTrailingEdgeRef()  { return cachedTrailEdge; }
+    @Override public @Nullable Object getTrailingNode1Ref() { return cachedTrailNode1; }
+    @Override public @Nullable Object getTrailingNode2Ref() { return cachedTrailNode2; }
+    @Override public double getTrailingEdgePosition()       { return cachedTrailEdgePos; }
+
     @Override
     public List<UUID> getOccupiedSignalGroups() {
         // Обновляем редко (каждые 20 тиков) — дорогое чтение
@@ -232,7 +240,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
         try {
             Object runtime = VH_RUNTIME.get(createTrainRef);
             if (runtime != null && VH_RUNTIME_PAUSED != null) {
-                // Только снимаем паузу — не трогаем POST_TRANSIT состояния
+                VH_RUNTIME_PAUSED.set(runtime, false);
             }
         } catch (Exception e) { /* ignore */ }
     }
@@ -271,7 +279,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
         if (createTrainRef == null) return;
         getSpeed();         // обновляет cachedSpeed
         isDerailed();       // обновляет cachedDerailed
-        isPlayerControlled(); // обновляет cachedManualTick
+        refreshControllingPlayer();
         refreshNavigationFast();
         cachedOnGraph = (readGraphRef() != null);
     }
@@ -326,6 +334,16 @@ public final class Create1211TrainHandle implements ITrainHandle {
                 ? MH_GET_LEADING_PT.invoke(firstCarriage) : null;
             if (leadingPoint != null) {
                 extractTravellingPointData(leadingPoint, true);
+                if (VH_TP_BLOCKED != null) {
+                    cachedBlocked = (boolean) VH_TP_BLOCKED.get(leadingPoint);
+                }
+            }
+
+            // v1.0.8 Fix #10: Trailing carriage graph data
+            Object trailingPoint = MH_GET_TRAILING_PT != null
+                ? MH_GET_TRAILING_PT.invoke(lastCarriage) : null;
+            if (trailingPoint != null) {
+                extractTravellingPointData(trailingPoint, false);
             }
 
             // Хвостовая позиция через entity
@@ -351,11 +369,83 @@ public final class Create1211TrainHandle implements ITrainHandle {
 
     private void extractTravellingPointData(Object tp, boolean isLeading) {
         try {
-            if (VH_TP_NODE1 != null) cachedLeadNode1 = VH_TP_NODE1.get(tp);
-            if (VH_TP_NODE2 != null) cachedLeadNode2 = VH_TP_NODE2.get(tp);
-            if (VH_TP_EDGE  != null) cachedLeadEdge  = VH_TP_EDGE.get(tp);
-            if (VH_TP_POSITION != null) cachedEdgePos = (double) VH_TP_POSITION.get(tp);
+            if (isLeading) {
+                if (VH_TP_NODE1 != null) cachedLeadNode1 = VH_TP_NODE1.get(tp);
+                if (VH_TP_NODE2 != null) cachedLeadNode2 = VH_TP_NODE2.get(tp);
+                if (VH_TP_EDGE  != null) cachedLeadEdge  = VH_TP_EDGE.get(tp);
+                if (VH_TP_POSITION != null) cachedEdgePos = (double) VH_TP_POSITION.get(tp);
+            } else {
+                // v1.0.8 Fix #10: Extract trailing TravellingPoint data
+                if (VH_TP_NODE1 != null) cachedTrailNode1 = VH_TP_NODE1.get(tp);
+                if (VH_TP_NODE2 != null) cachedTrailNode2 = VH_TP_NODE2.get(tp);
+                if (VH_TP_EDGE  != null) cachedTrailEdge  = VH_TP_EDGE.get(tp);
+                if (VH_TP_POSITION != null) cachedTrailEdgePos = (double) VH_TP_POSITION.get(tp);
+            }
         } catch (Exception e) { /* ignore */ }
+    }
+
+    /**
+     * A Create manual flag is not proof of a driver: it can remain set after a
+     * stop or schedule transition. Only a live, non-spectator player passenger
+     * authorizes manual control.
+     */
+    private void refreshControllingPlayer() {
+        cachedControllingPlayerId = null;
+        boolean manualRequested = false;
+        if (VH_MANUAL_TICK != null && createTrainRef != null) {
+            try {
+                Object value = VH_MANUAL_TICK.get(createTrainRef);
+                manualRequested = value instanceof Boolean b && b;
+            } catch (Exception ignored) { }
+        }
+
+        if (VH_CARRIAGES == null || createTrainRef == null || MH_ANY_ENTITY == null) {
+            cachedManualTick = false;
+            return;
+        }
+        try {
+            List<?> carriages = (List<?>) VH_CARRIAGES.get(createTrainRef);
+            if (carriages == null) {
+                cachedManualTick = false;
+                clearStaleRuntimePause();
+                return;
+            }
+            for (Object carriage : carriages) {
+                Object entity = MH_ANY_ENTITY.invoke(carriage);
+                if (!(entity instanceof net.minecraft.world.entity.Entity root)) continue;
+                UUID playerId = findPassengerPlayer(root);
+                if (playerId != null) {
+                    cachedControllingPlayerId = playerId;
+                    cachedManualTick = manualRequested;
+                    return;
+                }
+            }
+        } catch (Throwable ignored) { }
+
+        // No real driver: clear stale Create state so schedules continue normally.
+        cachedManualTick = false;
+        clearStaleRuntimePause();
+    }
+
+    @Nullable
+    private static UUID findPassengerPlayer(net.minecraft.world.entity.Entity entity) {
+        if (entity instanceof net.minecraft.world.entity.player.Player player
+                && player.isAlive() && !player.isSpectator()) {
+            return player.getUUID();
+        }
+        for (net.minecraft.world.entity.Entity passenger : entity.getPassengers()) {
+            UUID playerId = findPassengerPlayer(passenger);
+            if (playerId != null) return playerId;
+        }
+        return null;
+    }
+
+    private void clearStaleRuntimePause() {
+        if (VH_RUNTIME == null || VH_RUNTIME_PAUSED == null || createTrainRef == null) return;
+        try {
+            Object runtime = VH_RUNTIME.get(createTrainRef);
+            if (runtime != null) VH_RUNTIME_PAUSED.set(runtime, false);
+        } catch (Exception ignored) { }
     }
 
     @SuppressWarnings("unchecked")
@@ -454,6 +544,15 @@ public final class Create1211TrainHandle implements ITrainHandle {
             VH_TP_NODE2    = safeVH(tpLookup, tpCls, "node2",    null);
             VH_TP_EDGE     = safeVH(tpLookup, tpCls, "edge",     null);
             VH_TP_POSITION = safeVH(tpLookup, tpCls, "position", double.class);
+            VH_TP_BLOCKED  = safeVH(tpLookup, tpCls, "blocked", boolean.class);
+
+            // ScheduleRuntime stores a simple pause flag that must be cleared after
+            // YIELD/STOP; do not cancel the existing Navigation path.
+            Class<?> runtimeCls = Class.forName(
+                "com.simibubi.create.content.trains.schedule.ScheduleRuntime");
+            MethodHandles.Lookup runtimeLookup = MethodHandles.privateLookupIn(
+                runtimeCls, MethodHandles.lookup());
+            VH_RUNTIME_PAUSED = safeVH(runtimeLookup, runtimeCls, "paused", boolean.class);
 
             // Entity.position()
             Class<?> entityCls = net.minecraft.world.entity.Entity.class;

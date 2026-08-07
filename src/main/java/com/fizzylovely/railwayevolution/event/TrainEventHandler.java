@@ -19,10 +19,10 @@ public class TrainEventHandler {
         TrainAIManager manager = TrainAIManager.getInstance();
         if (manager == null) return;
 
-        ServerLevel overworld = event.getServer().overworld();
-        long currentTick = overworld.getGameTime();
+        ServerLevel fallbackLevel = event.getServer().overworld();
+        long currentTick = fallbackLevel.getGameTime();
 
-        manager.tick(overworld, currentTick);
+        manager.tick(fallbackLevel, currentTick);
     }
 
     @SubscribeEvent

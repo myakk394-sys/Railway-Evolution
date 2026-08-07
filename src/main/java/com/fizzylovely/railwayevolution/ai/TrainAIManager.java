@@ -111,8 +111,8 @@ public class TrainAIManager {
         EcosystemRegistry eco = EcosystemRegistry.getInstance();
         eco.tickRefreshAll(currentTick);
 
-        // v1.0.5: Scan which trains are player-controlled (every 20 ticks)
-        // Creates/removes PlayerTrainHandle wrappers in EcosystemRegistry
+        // Recovery passenger scan. Normal player-control synchronization occurs in
+        // EcosystemRegistry.tickRefreshAll() every tick.
         if (currentTick % 20 == 0) {
             eco.scanPlayerControls(level);
         }
@@ -125,10 +125,11 @@ public class TrainAIManager {
         // Tick all AI controllers
         for (TrainAIController controller : controllers.values()) {
             try {
-                controller.tick(level, currentTick);
+                ServerLevel trainLevel = controller.getLastKnownLevel();
+                controller.tick(trainLevel != null ? trainLevel : level, currentTick);
             } catch (Exception e) {
-                CreateRailwayMod.LOGGER.error("[AI Manager] Error ticking train {}: {}",
-                        controller.getTrainId().toString().substring(0, 8), e.getMessage());
+                CreateRailwayMod.LOGGER.error("[AI Manager] Error ticking train {}",
+                        controller.getTrainId().toString().substring(0, 8), e);
             }
         }
 
@@ -244,7 +245,7 @@ public class TrainAIManager {
             CreateRailwayMod.aiWarn("[AI Manager] Create Mod not found — AI system disabled");
             createModAvailable = false;
         } catch (Exception e) {
-            CreateRailwayMod.LOGGER.error("[AI Manager] Reflection init error: {}", e.getMessage());
+            CreateRailwayMod.LOGGER.error("[AI Manager] Reflection init error", e);
             createModAvailable = false;
         }
     }
@@ -317,7 +318,7 @@ public class TrainAIManager {
             });
 
         } catch (Exception e) {
-            CreateRailwayMod.LOGGER.error("[AI Manager] Train scan error: {}", e.getMessage());
+            CreateRailwayMod.LOGGER.error("[AI Manager] Train scan error", e);
             reflectionReady = false;
         }
     }
@@ -365,11 +366,15 @@ public class TrainAIManager {
             StoppedTrainRegistry.getInstance().remove(trainId);
             MovingTrainRegistry.getInstance().remove(trainId);
             JunctionReservationManager.getInstance().releaseAll(trainId);
+            // v1.0.8 Fix #8: Remove ghost handle immediately (was only in scanForTrains)
+            EcosystemRegistry.getInstance().removeTrainHandle(trainId);
         }
     }
 
     /**
      * v1.0.7: Build global scan maps in a single O(n) pass.
+     * v1.0.8 Fix #5: edgeToTrain now stores EdgeOccupancy (multi-train per edge).
+     *
      * Populates edgeToTrain, reverseEdgeMap, and junctionApproachMap
      * from ALL controllers. Per-train filtering (self, bypass, etc.)
      * is deferred to query time in TrainAIController.filterGlobalHit().
@@ -383,13 +388,21 @@ public class TrainAIManager {
         scanMaps.clear();
 
         for (TrainAIController ctrl : controllers.values()) {
-            // ── edgeToTrain: leading + trailing edge → controller ──
+            // ── edgeToTrain: leading + trailing edge → EdgeOccupancy ──
+            // v1.0.8: computeIfAbsent + add instead of putIfAbsent.
+            // Multiple trains on the same edge are all registered.
             Object leadEdge = ctrl.getLeadingEdge();
             Object trailEdge = ctrl.getTrailingEdge();
-            if (leadEdge != null)
-                scanMaps.edgeToTrain.putIfAbsent(leadEdge, ctrl);
-            if (trailEdge != null)
-                scanMaps.edgeToTrain.putIfAbsent(trailEdge, ctrl);
+            if (leadEdge != null) {
+                scanMaps.edgeToTrain
+                    .computeIfAbsent(leadEdge, k -> scanMaps.acquireOccupancy())
+                    .add(ctrl);
+            }
+            if (trailEdge != null) {
+                scanMaps.edgeToTrain
+                    .computeIfAbsent(trailEdge, k -> scanMaps.acquireOccupancy())
+                    .add(ctrl);
+            }
 
             // ── reverseEdgeMap: pre-computed reverse edge → controller ──
             // Each controller computes myReverseLeadingEdge in readTrackGraphData().
@@ -399,16 +412,20 @@ public class TrainAIManager {
             if (revEdge != null)
                 scanMaps.reverseEdgeMap.putIfAbsent(revEdge, ctrl);
 
-            // ── junctionApproachMap: node2 → controller approaching that junction ──
-            // Only include if the controller's leading edge is NOT already in edgeToTrain
-            // (avoids double-counting trains already detectable via edge-based BFS).
+            // ── junctionApproachMap: node2 → closest controller approaching ──
+            // v1.0.8 Fix #6: Distance tie-break — closest train to junction wins.
+            // Also populates junctionApproachDist (was declared but never filled).
             Object node2 = ctrl.getLeadingNode2();
             if (node2 != null && leadEdge != null && ctrl.getCurrentPosition() != null) {
-                if (!scanMaps.edgeToTrain.containsKey(leadEdge)
-                        || scanMaps.edgeToTrain.get(leadEdge) == ctrl) {
-                    // Use putIfAbsent — first train registered at this junction wins.
-                    // BFS applies distance-based tiebreaking at query time anyway.
-                    scanMaps.junctionApproachMap.putIfAbsent(node2, ctrl);
+                EdgeOccupancy edgeOcc = scanMaps.edgeToTrain.get(leadEdge);
+                if (edgeOcc == null || (edgeOcc.count == 1 && edgeOcc.first == ctrl)) {
+                    double distToJunction = ctrl.getDistanceToLeadingNode2();
+                    Double existingDist = scanMaps.junctionApproachDist.get(node2);
+                    if (existingDist == null || distToJunction < existingDist) {
+                        // Closer train wins — overwrite both map and distance
+                        scanMaps.junctionApproachMap.put(node2, ctrl);
+                        scanMaps.junctionApproachDist.put(node2, distToJunction);
+                    }
                 }
             }
         }

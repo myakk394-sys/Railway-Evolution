@@ -372,6 +372,9 @@ public class TrainAIController {
     /** New BFS perception engine — replaces old graphWalkScan for flow detection. */
     private final PerceptionEngine perceptionV2 = new PerceptionEngine();
 
+    // v1.0.8 Fix #2: Persistent snapshot — survives ctxV2.reset(), lives until next scan
+    private ObstacleProfile cachedObstacleProfile;
+
     /**
      * True when the new FSM is in FLOW_FOLLOWER state.
      * Used to prevent old YIELDING escalation from firing while following a leader.
@@ -444,8 +447,8 @@ public class TrainAIController {
 
             reflectionInitialized = true;
         } catch (Exception e) {
-            CreateRailwayMod.LOGGER.error("[AI] Reflection init failed for train {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("[AI] Reflection init failed for train {}",
+                    trainId.toString().substring(0, 8), e);
         }
     }
 
@@ -460,7 +463,8 @@ public class TrainAIController {
             isTurnMethod = edgeObject.getClass().getMethod("isTurn");
             isTurnMethod.setAccessible(true);
         } catch (NoSuchMethodException e) {
-            CreateRailwayMod.aiDebug("[AI] TrackEdge.isTurn() not found: {}", e.getMessage());
+            CreateRailwayMod.LOGGER.error("[AI] TrackEdge.isTurn() lookup failed for train {}",
+                    trainId.toString().substring(0, 8), e);
         }
     }
 
@@ -670,6 +674,8 @@ public class TrainAIController {
                     if (other.trainId.equals(this.trainId)) continue;
                     if (other.currentPosition == null) continue;
                     if (bypassingTrainId != null && other.trainId.equals(bypassingTrainId)) continue;
+                    // A physical fallback must never bridge independent TrackGraphs.
+                    if (myGraph != null && other.myGraph != null && myGraph != other.myGraph) continue;
                     // Y filter \u2014 generous for slopes
                     int dy = Math.abs(currentPosition.getY() - other.currentPosition.getY());
                     if (dy > 6) continue;
@@ -1281,6 +1287,14 @@ public class TrainAIController {
         }
     }
 
+    public ServerLevel getLastKnownLevel() {
+        return lastKnownLevel;
+    }
+
+    private String dimensionId() {
+        return lastKnownLevel != null ? lastKnownLevel.dimension().location().toString() : "minecraft:overworld";
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // v1.0.5 — Ecosystem tick (FLOW_FOLLOWER + emergency follow-brake)
     // Runs in parallel with old state machine. Adds new behaviours only.
@@ -1315,9 +1329,9 @@ public class TrainAIController {
             return;
         }
 
-        // Стагерированный скан (каждые 3 тика, разброс по trainId)
-        long scanOffset = (trainId.getLeastSignificantBits() & 0x3L);
-        boolean shouldScan = ((currentTick + scanOffset) % 3 == 0);
+        // v1.0.8 Fix #2: Стагерированный скан — 3 фазы по hashCode (не 4!)
+        int scanPhase = Math.floorMod(trainId.hashCode(), 3);
+        boolean shouldScan = ((currentTick % 3) == scanPhase);
 
         // ── 1. Заполнить контекст из уже прочитанных полей (0 доп. рефлексии) ──
         ctxV2.reset();
@@ -1338,7 +1352,9 @@ public class TrainAIController {
         ctxV2.selfHandle = eco.getAiHandle(trainId);
         if (ctxV2.selfHandle == null) return;
 
-        // ── 2. PerceptionEngine скан (только если пора сканировать) ──
+        // ── 2. PerceptionEngine скан — кэширование профиля ──
+        // v1.0.8 Fix #2: На scan-тике обновляем кэш; на промежуточных — восстанавливаем.
+        // Профиль живёт 3 тика без мигания ON/OFF.
         if (shouldScan) {
             try {
                 ObstacleProfile profile = perceptionV2.scan(
@@ -1347,17 +1363,22 @@ public class TrainAIController {
                         eco.allHandles(),
                         routeNextHop,
                         50.0 * bufferScale);
+                cachedObstacleProfile = profile;  // persist until next scan
                 ctxV2.obstacleProfile = profile;
                 v2LastEcoScanTick = currentTick;
             } catch (Exception e) {
-                CreateRailwayMod.aiDebug("[EcoV2] scan error: {}", e.getMessage());
+                CreateRailwayMod.LOGGER.error("[EcoV2] scan error for train {}",
+                        trainId.toString().substring(0, 8), e);
                 return;
             }
+        } else {
+            // Non-scan tick: restore cached profile (may be null on first tick — OK)
+            ctxV2.obstacleProfile = cachedObstacleProfile;
         }
 
         ObstacleProfile obs = ctxV2.obstacleProfile;
         if (obs == null) {
-            // Нет профиля — выход из flow-режима если был
+            // Нет профиля и нет кэша (первый тик) — безопасный выход
             v2InFlowFollower = false;
             v2FlowTargetSpeed = 0;
             return;
@@ -1414,13 +1435,14 @@ public class TrainAIController {
             SafetyManager.SafetyResult verdict = safety.evaluate(ctxV2, currentSpeed);
             if (verdict.verdict() == SafetyManager.Verdict.EMERGENCY_FOLLOW_BRAKE) {
                 double emergencySpeed = Math.max(0, verdict.maxAllowedSpeed);
-                if (emergencySpeed < currentSpeed) {
+                if (emergencySpeed < Math.abs(currentSpeed)) {
+                    double signedEmergencySpeed = Math.copySign(emergencySpeed, currentSpeed);
                     // Применяем через старый applySpeedControl — нет конфликта
-                    applySpeedControl(emergencySpeed);
+                    applySpeedControl(signedEmergencySpeed);
                     CreateRailwayMod.aiDebug(
                             "[EcoV2] {} EMERGENCY_BRAKE → {:.2f}b/t (leader decel)",
                             trainId.toString().substring(0, 8),
-                            emergencySpeed);
+                            signedEmergencySpeed);
                 }
             }
         } else {
@@ -1471,34 +1493,11 @@ public class TrainAIController {
                 this.derailed = derailedField.getBoolean(createTrainRef);
             }
 
-            // Detect if a player is manually controlling this train.
-            // Primary: Train.manualTick=true (set when player presses WASD).
-            //   NOTE: manualTick resets to false EVERY TICK by Create's Train.tick().
-            //   So it's only true for 1 tick — unreliable as sole indicator.
-            // Secondary: ScheduleRuntime.paused=true — set by Create when player
-            //   takes manual control via Train Controls. Persists across ticks.
-            // Tertiary: scan carriage entity passengers for ServerPlayer.
-            this.playerControlled = false;
-            if (manualTickField != null) {
-                try {
-                    this.playerControlled = manualTickField.getBoolean(createTrainRef);
-                } catch (Exception ignored) {}
-            }
-            // Check ScheduleRuntime.paused — most reliable indicator of player control
-            if (!this.playerControlled && runtimeField != null) {
-                try {
-                    Object runtime = runtimeField.get(createTrainRef);
-                    if (runtime != null) {
-                        Field pausedF = findField(runtime.getClass(), "paused");
-                        if (pausedF != null && pausedF.getBoolean(runtime)) {
-                            this.playerControlled = true;
-                        }
-                    }
-                } catch (Exception ignored) {}
-            }
-            // Fallback: check for riding players even if above methods failed
+            // A paused runtime or manualTick can be stale. Manual control exists only
+            // while a real live player is seated in this train's carriage entity.
+            this.playerControlled = detectPlayerRiding(level);
             if (!this.playerControlled) {
-                this.playerControlled = detectPlayerRiding(level);
+                wakeCreateNavigation();
             }
 
             // Read navigation distance
@@ -1662,8 +1661,8 @@ public class TrainAIController {
                     trainLength, headingX, headingZ, derailed, gameTick, myGraph);
 
         } catch (Exception e) {
-            CreateRailwayMod.aiWarn("[AI] Data read error for train {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("[AI] Data read error for train {}",
+                    trainId.toString().substring(0, 8), e);
         }
     }
 
@@ -1850,8 +1849,7 @@ public class TrainAIController {
                 }
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] TrackGraph read failed for {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
         // Update the beam width based on whether our leading edge is a curve or
         // straight
@@ -1929,6 +1927,26 @@ public class TrainAIController {
             Object loc = nodeGetLocationMethod.invoke(node);
             if (loc instanceof net.minecraft.core.Vec3i v)
                 return new double[] { v.getX(), v.getZ() };
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    /**
+     * v1.0.8 Fix #7: Get node location as {X, Y, Z} for 3D junction keys.
+     * Returns null on any reflection failure.
+     */
+    private double[] getNodeXYZ(Object node) {
+        if (node == null)
+            return null;
+        try {
+            if (nodeGetLocationMethod == null)
+                nodeGetLocationMethod = findMethod(node.getClass(), "getLocation");
+            if (nodeGetLocationMethod == null)
+                return null;
+            Object loc = nodeGetLocationMethod.invoke(node);
+            if (loc instanceof net.minecraft.core.Vec3i v)
+                return new double[] { v.getX(), v.getY(), v.getZ() };
         } catch (Exception ignored) {
         }
         return null;
@@ -2028,8 +2046,7 @@ public class TrainAIController {
                 }
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] anyAvailableEntity() failed for {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
 
         // ─── Approach 1: Carriage.entities (Map) →
@@ -2052,8 +2069,7 @@ public class TrainAIController {
                 }
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] entities.positionAnchor failed for {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
 
         // ─── Approach 2: bogeys → CarriageBogey.getAnchorPosition() → Vec3 ───
@@ -2081,8 +2097,7 @@ public class TrainAIController {
                 }
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] bogey.getAnchorPosition() failed for {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
 
         return null;
@@ -2332,6 +2347,8 @@ public class TrainAIController {
                         continue;
                     if (ultraOther.currentPosition == null)
                         continue;
+                    if (myGraph != null && ultraOther.myGraph != null && myGraph != ultraOther.myGraph)
+                        continue;
                     int dy = Math.abs(currentPosition.getY() - ultraOther.currentPosition.getY());
                     if (dy > 10)
                         continue;
@@ -2394,6 +2411,8 @@ public class TrainAIController {
                     if (bypassingTrainId != null && other.trainId.equals(bypassingTrainId))
                         continue;
                     if (other.currentPosition == null)
+                        continue;
+                    if (myGraph != null && other.myGraph != null && myGraph != other.myGraph)
                         continue;
                     int dy = Math.abs(currentPosition.getY() - other.currentPosition.getY());
                     if (dy > 10)
@@ -2874,7 +2893,7 @@ public class TrainAIController {
     private boolean isJunctionExitClear(Object junctionNode,
             Object exitNode,
             Map<Object, Object> juncConns,
-            IdentityHashMap<Object, TrainAIController> edgeToTrain,
+            IdentityHashMap<Object, EdgeOccupancy> edgeToTrain,
             IdentityHashMap<Object, TrainAIController> reverseEdgeMap) {
 
         // ── Check 1: Physical junction occupancy ──
@@ -3002,7 +3021,7 @@ public class TrainAIController {
         // Per-train filters (self, bypass, junction yielding, Y-level) are applied at
         // each query point via filterGlobalHit() instead of at build time.
         TrainScanMaps scanMaps = manager.getScanMaps();
-        IdentityHashMap<Object, TrainAIController> edgeToTrain = scanMaps.edgeToTrain;
+        IdentityHashMap<Object, EdgeOccupancy> edgeToTrain = scanMaps.edgeToTrain;
         IdentityHashMap<Object, TrainAIController> reverseEdgeMap = scanMaps.reverseEdgeMap;
         IdentityHashMap<Object, TrainAIController> junctionApproachMap = scanMaps.junctionApproachMap;
 
@@ -3014,7 +3033,7 @@ public class TrainAIController {
         // ── Step 1: check if another train is AHEAD on our own leading edge ──
         // (Our own leading edge is always on our route — no side-track filter needed
         // here)
-        TrainAIController hit = filterGlobalHit(edgeToTrain.get(myLeadingEdge));
+        TrainAIController hit = filterBestFromOccupancy(edgeToTrain.get(myLeadingEdge));
         if (hit != null) {
             double posDiff = hit.myLeadingEdgePos - myLeadingEdgePos;
             // Old threshold: 0.5 blocks. That left a blindspot: trains on the SAME edge
@@ -3112,9 +3131,9 @@ public class TrainAIController {
                 Map<Object, Object> juncConns = invokeGetConnectionsFrom(node);
                 boolean isRealJunction = juncConns != null && juncConns.size() >= 2;
                 // v5.3: Skip if we already hold the reservation for this junction
-                double[] jcXZ = getNodeXZ(node);
+                double[] jcXZ = getNodeXYZ(node);
                 if (isRealJunction && jcXZ != null) {
-                    long jcKey = JunctionReservationManager.packKey(jcXZ[0], jcXZ[1]);
+                    long jcKey = JunctionReservationManager.packKey(jcXZ[0], jcXZ[1], jcXZ[2]);
                     if (jcKey == lastReservedJunctionKey) {
                         isRealJunction = false; // we hold the reservation — skip converge
                     }
@@ -3191,7 +3210,7 @@ public class TrainAIController {
             //    The train further away (dist > otherDistToJunc + 4) yields.
             // This covers perpendicular crossings, T-junctions, curve exits.
             if (connections != null && connections.size() >= 3) {
-                double[] jXZ = getNodeXZ(node);
+                double[] jXZ = getNodeXYZ(node);
 
                 // ── v5.3: Compute braking distance for dynamic ranges ──
                 // Capped at 18 blocks to prevent random stops far from junctions.
@@ -3207,7 +3226,7 @@ public class TrainAIController {
                 boolean signalProtected = createWaitingForSignal && createDistToSignal < dist + 10;
                 if (!graphJunctionNotEnoughSpace && jXZ != null
                         && dist <= juncBrakeDist && !signalProtected) {
-                    long juncKey = JunctionReservationManager.packKey(jXZ[0], jXZ[1]);
+                    long juncKey = JunctionReservationManager.packKey(jXZ[0], jXZ[1], jXZ[2]);
                     long tick = lastKnownLevel != null ? lastKnownLevel.getGameTime() : 0;
                     // v1.0.5: Pass our distance so closer train wins priority
                     JunctionReservationManager.ReserveResult result =
@@ -3241,7 +3260,7 @@ public class TrainAIController {
                 // SKIP if we hold the reservation (exit safety is covered by reservation).
                 // Range: braking distance (need to stop before entering if exit blocked)
                 boolean weHoldReservation = (lastReservedJunctionKey != -1 && jXZ != null
-                        && lastReservedJunctionKey == JunctionReservationManager.packKey(jXZ[0], jXZ[1]));
+                        && lastReservedJunctionKey == JunctionReservationManager.packKey(jXZ[0], jXZ[1], jXZ[2]));
                 if (!weHoldReservation && !graphJunctionNotEnoughSpace && !routeNextHop.isEmpty()
                         && dist <= juncBrakeDist) {
                     Object exitNode = routeNextHop.get(node);
@@ -3263,7 +3282,7 @@ public class TrainAIController {
                 // Also: only block on STOPPED trains (speed < 0.12). Moving trains clear in 1-2 ticks
                 // and blocking on them causes the 2-3s false-stop at every junction exit.
                 boolean weHoldThisJunc = (lastReservedJunctionKey != -1 && jXZ != null
-                        && lastReservedJunctionKey == JunctionReservationManager.packKey(jXZ[0], jXZ[1]));
+                        && lastReservedJunctionKey == JunctionReservationManager.packKey(jXZ[0], jXZ[1], jXZ[2]));
                 if (!graphJunctionNotEnoughSpace && !weHoldThisJunc && jXZ != null
                         && dist <= juncBrakeDist && currentPosition != null) {
                     TrainAIManager jMgr = TrainAIManager.getInstance();
@@ -3346,7 +3365,7 @@ public class TrainAIController {
                 }
 
                 // Check if any train occupies this edge (same direction)
-                hit = filterGlobalHit(edgeToTrain.get(nextEdge));
+                hit = filterBestFromOccupancy(edgeToTrain.get(nextEdge));
                 if (hit != null) {
                     // Distance = accumulated rail dist + target's position on this edge
                     double totalDist = dist + hit.myLeadingEdgePos;
@@ -3801,8 +3820,7 @@ public class TrainAIController {
         try {
             throttleField.setDouble(createTrainRef, 1.0);
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] Failed to restore throttle for train {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
     }
 
@@ -3874,8 +3892,7 @@ public class TrainAIController {
                 targetSpeedField.setDouble(createTrainRef, 0.0);
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] Failed to force stop train {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
     }
 
@@ -3944,8 +3961,7 @@ public class TrainAIController {
                 speedField.setDouble(createTrainRef, sign * desiredSpeed);
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] Failed to set speed for train {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
     }
 
@@ -3970,8 +3986,7 @@ public class TrainAIController {
                 targetSpeedField.setDouble(createTrainRef, -reverseSpd);
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] Failed to apply reverse speed for train {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
     }
 
@@ -4181,8 +4196,7 @@ public class TrainAIController {
             }
 
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] Failed to wake navigation for train {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
     }
 
@@ -4218,8 +4232,7 @@ public class TrainAIController {
                 }
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] cancelNav failed for train {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
         // After cancelling, wake the runtime to re-pathfind
         wakeCreateNavigation();
@@ -4525,7 +4538,7 @@ public class TrainAIController {
                 currentPosition.getY(),
                 (int) (currentPosition.getZ() + headingZ * 15));
         VirtualBlockSystem.getInstance().tryReserve(
-                trainId, currentPosition, aheadPos, direction, currentTick);
+                dimensionId(), trainId, currentPosition, aheadPos, direction, currentTick);
     }
 
     // ─── State Machine ───
@@ -4589,10 +4602,16 @@ public class TrainAIController {
             }
         }
 
-        // When starting bypass or reverse, shrink the scan beam for 5 seconds
-        if ((newState == TrainState.BYPASSING || newState == TrainState.REVERSING) && obstacleTrainId != null) {
-            bypassingTrainId = obstacleTrainId;
-            bypassModeUntilTick = currentTick + BYPASS_MODE_TICKS;
+        // ── Junction reservation & VBS release on stop/yielding states (v1.0.8 deadlock fix) ──
+        // When stopped or waiting before entering the junction, release the lock immediately
+        // so the other train on the junction or crossing can pass through.
+        if (newState == TrainState.YIELDING || newState == TrainState.WAIT_FOR_CLEARANCE
+                || newState == TrainState.TRAFFIC_JAM) {
+            if (lastReservedJunctionKey != -1) {
+                JunctionReservationManager.getInstance().release(lastReservedJunctionKey, trainId);
+                lastReservedJunctionKey = -1;
+            }
+            VirtualBlockSystem.getInstance().releaseAll(trainId);
         }
 
         CreateRailwayMod.aiLog("[AI] Train {} state: {} -> {} ({})",
@@ -5023,8 +5042,7 @@ public class TrainAIController {
                 }
             }
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] Whistle detection failed for {}: {}",
-                    trainId.toString().substring(0, 8), e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
         return false;
     }
@@ -5076,7 +5094,7 @@ public class TrainAIController {
                     net.minecraft.sounds.SoundEvents.BELL_BLOCK,
                     net.minecraft.sounds.SoundSource.BLOCKS, 3.0f, 0.5f);
         } catch (Exception e) {
-            CreateRailwayMod.aiDebug("[AI] Failed to play whistle sound: {}", e.getMessage());
+            CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
     }
 
@@ -5110,7 +5128,8 @@ public class TrainAIController {
                                 }
                                 if (entityObj instanceof net.minecraft.world.entity.Entity e) {
                                     for (net.minecraft.world.entity.Entity p : e.getPassengers()) {
-                                        if (p instanceof ServerPlayer) return true;
+                                        if (p instanceof net.minecraft.world.entity.player.Player player
+                                                && player.isAlive() && !player.isSpectator()) return true;
                                     }
                                 }
                             } catch (Exception ignored) {}
@@ -5126,7 +5145,8 @@ public class TrainAIController {
                                 }
                                 if (entityObj instanceof net.minecraft.world.entity.Entity e) {
                                     for (net.minecraft.world.entity.Entity p : e.getPassengers()) {
-                                        if (p instanceof ServerPlayer) return true;
+                                        if (p instanceof net.minecraft.world.entity.player.Player player
+                                                && player.isAlive() && !player.isSpectator()) return true;
                                     }
                                 }
                             }
@@ -5169,7 +5189,8 @@ public class TrainAIController {
                     } catch (Exception ignored) {}
                     if (!isOurCarriage) continue;
                     for (net.minecraft.world.entity.Entity passenger : entity.getPassengers()) {
-                        if (passenger instanceof ServerPlayer) return true;
+                        if (passenger instanceof net.minecraft.world.entity.player.Player player
+                                && player.isAlive() && !player.isSpectator()) return true;
                     }
                 }
             } catch (Exception ignored) {}
@@ -5409,6 +5430,16 @@ public class TrainAIController {
     public Object getReverseLeadingEdge() { return myReverseLeadingEdge; }
 
     /**
+     * v1.0.8 Fix #6: Distance from leading position to forward node (node2).
+     * Used by buildScanMaps() for junction distance tie-breaking.
+     */
+    public double getDistanceToLeadingNode2() {
+        if (myLeadingEdge == null) return Double.MAX_VALUE;
+        double edgeLen = getEdgeLength(myLeadingEdge);
+        return Math.max(0, edgeLen - myLeadingEdgePos);
+    }
+
+    /**
      * Filter a global-map hit: returns null if the hit should be ignored
      * by THIS train (self, bypass, junction yielding, Y-level).
      * Called at each query point where the old per-train-filtered local maps
@@ -5424,6 +5455,34 @@ public class TrainAIController {
             if (dy > 10) return null;
         }
         return hit;
+    }
+
+    /**
+     * v1.0.8 Fix #5: Extract the best (closest, non-filtered) controller from
+     * an EdgeOccupancy. Iterates first/second, applies filterGlobalHit() to each,
+     * returns the one closest to our leading edge position.
+     *
+     * @param occ EdgeOccupancy from the global edgeToTrain map, may be null
+     * @return best candidate controller, or null if none pass filters
+     */
+    private TrainAIController filterBestFromOccupancy(EdgeOccupancy occ) {
+        if (occ == null) return null;
+
+        TrainAIController best = null;
+
+        TrainAIController a = filterGlobalHit(occ.first);
+        TrainAIController b = (occ.count >= 2) ? filterGlobalHit(occ.second) : null;
+
+        if (a != null && b != null) {
+            // Both pass filters — pick the one closest to us on the edge
+            double distA = Math.abs(a.myLeadingEdgePos - this.myLeadingEdgePos);
+            double distB = Math.abs(b.myLeadingEdgePos - this.myLeadingEdgePos);
+            best = (distA <= distB) ? a : b;
+        } else {
+            best = (a != null) ? a : b;
+        }
+
+        return best;
     }
 
     @Override

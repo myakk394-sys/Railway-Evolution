@@ -115,6 +115,19 @@ public final class ObstacleProfile {
     public static final double FLOW_SPEED_TOLERANCE  = 0.15;  // б/тик — разница скоростей
     public static final double OVERLAP_THRESHOLD     = 1.0;   // блоки — считать перекрытием
 
+    // v1.0.8 Fix #11: Per-category tracking (zero-alloc)
+    public double nearestHeadOnDist          = Double.MAX_VALUE;
+    @Nullable public UUID nearestHeadOnId;
+    public double nearestSameDirectionDist   = Double.MAX_VALUE;
+    @Nullable public UUID nearestSameDirectionId;
+    public double nearestStoppedDist         = Double.MAX_VALUE;
+    @Nullable public UUID nearestStoppedId;
+    public double nearestPhysicalThreatDist  = Double.MAX_VALUE;
+    @Nullable public UUID nearestPhysicalThreatId;
+
+    // Primary candidate is selected after every scan candidate has been collected.
+    private double primarySelectionScore     = Double.NEGATIVE_INFINITY;
+
     // ──────────────────────────────────────────────────────────────────────
 
     /** Очистка перед новым сканом. Нулевых аллокаций. */
@@ -135,6 +148,16 @@ public final class ObstacleProfile {
         junctionHasSpace    = true;
         junctionYieldToId   = null;
         isOverlapping       = false;
+        // v1.0.8 Fix #11: Reset categories
+        nearestHeadOnDist        = Double.MAX_VALUE;
+        nearestHeadOnId          = null;
+        nearestSameDirectionDist = Double.MAX_VALUE;
+        nearestSameDirectionId   = null;
+        nearestStoppedDist       = Double.MAX_VALUE;
+        nearestStoppedId         = null;
+        nearestPhysicalThreatDist = Double.MAX_VALUE;
+        nearestPhysicalThreatId   = null;
+        primarySelectionScore     = Double.NEGATIVE_INFINITY;
     }
 
     /** Есть ли обнаруженное препятствие. */
@@ -182,7 +205,7 @@ public final class ObstacleProfile {
     }
 
     /**
-     * Обновить профиль данными другого кандидата, если он ближе.
+     * Обновить профиль данными другого кандидата, если он опаснее.
      * Используется PerceptionEngine при многослойном сканировании.
      *
      * @param candidate кандидат (временный, не аллоцируется — поля передаются напрямую)
@@ -194,8 +217,29 @@ public final class ObstacleProfile {
             boolean candidateIsHeadOn, boolean candidateIsDeparting,
             boolean candidateIsParkingZone, boolean candidateDistGraphBased) {
 
-        if (candidateDist >= distance) return; // не ближе — игнорируем
+        // Keep category data independent from the final primary selection.
+        if (candidateIsHeadOn && candidateDist < nearestHeadOnDist) {
+            nearestHeadOnDist = candidateDist;
+            nearestHeadOnId = candidateId;
+        }
+        if (!candidateIsHeadOn && candidateObstacleSpeed > 0.05 && candidateDist < nearestSameDirectionDist) {
+            nearestSameDirectionDist = candidateDist;
+            nearestSameDirectionId = candidateId;
+        }
+        if (candidateObstacleSpeed < 0.05 && candidateDist < nearestStoppedDist) {
+            nearestStoppedDist = candidateDist;
+            nearestStoppedId = candidateId;
+        }
+        if (!candidateDistGraphBased && candidateDist < nearestPhysicalThreatDist) {
+            nearestPhysicalThreatDist = candidateDist;
+            nearestPhysicalThreatId = candidateId;
+        }
 
+        double candidateRisk = selectionRisk(candidateDist, candidateClosingSpeed,
+                candidateIsHeadOn, candidateObstacleSpeed, candidateDistGraphBased);
+        if (candidateRisk <= primarySelectionScore) return;
+
+        primarySelectionScore     = candidateRisk;
         this.obstacleId           = candidateId;
         this.leaderIsPlayer       = candidateIsPlayer;
         this.distance             = candidateDist;
@@ -206,6 +250,22 @@ public final class ObstacleProfile {
         this.isDeparting          = candidateIsDeparting;
         this.isParkingZone        = candidateIsParkingZone;
         this.isOverlapping        = candidateDist <= OVERLAP_THRESHOLD;
+    }
+
+    /**
+     * Relative speed and direction take precedence over raw proximity. This keeps a
+     * closing or head-on train selected over a nearby train that is moving away.
+     */
+    private static double selectionRisk(double candidateDist, double candidateClosingSpeed,
+                                        boolean candidateIsHeadOn, double candidateSpeed,
+                                        boolean candidateDistGraphBased) {
+        double safeDistance = Math.max(0.0, candidateDist);
+        double distanceRisk = 1.0 / (1.0 + safeDistance / 12.0);
+        double closingRisk = Math.max(0.0, candidateClosingSpeed) * 2.0;
+        double directionRisk = candidateIsHeadOn ? 1.0 : 0.0;
+        double stoppedRisk = candidateSpeed < 0.05 ? 0.30 : 0.0;
+        double physicalRisk = candidateDistGraphBased ? 0.0 : 0.10;
+        return distanceRisk + closingRisk + directionRisk + stoppedRisk + physicalRisk;
     }
 
     /**

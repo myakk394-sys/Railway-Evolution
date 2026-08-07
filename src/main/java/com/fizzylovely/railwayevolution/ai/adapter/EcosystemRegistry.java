@@ -199,10 +199,12 @@ public final class EcosystemRegistry {
      */
     public void tickRefreshAll(long currentTick) {
         for (Create1211TrainHandle handle : aiHandles.values()) {
-            double prevSpeed = handle.getSpeed();
             handle.refreshFast();
-            double newSpeed = handle.getSpeed();
-            if (Math.abs(newSpeed - prevSpeed) > 0.001 || currentTick % 10 == 0) {
+            updatePlayerControl(handle.getId(), handle.getControllingPlayerUUID(), null);
+            // v1.0.8 Fix #3: Moving trains refresh positions every tick (no lag).
+            // Stationary trains (speed ≤ 0.01) don't drift → every 10 ticks is safe.
+            double speed = Math.abs(handle.getSpeed());
+            if (speed > 0.01 || currentTick % 10 == 0) {
                 handle.refreshFull(currentTick);
             }
         }
@@ -210,7 +212,8 @@ public final class EcosystemRegistry {
 
     /**
      * Сканировать игроков в поездах и обновить playerHandles.
-     * Вызывается каждые N тиков из TrainAIManager.
+     * Retained as a recovery scan for edge cases where Create's manual flag was
+     * updated before carriage passengers became available.
      */
     public void scanPlayerControls(ServerLevel level) {
         stillControlledBuf.clear();
@@ -219,7 +222,8 @@ public final class EcosystemRegistry {
             UUID trainId = e.getKey();
             Create1211TrainHandle aiHandle = e.getValue();
 
-            if (!aiHandle.isPlayerControlled()) {
+            UUID playerUUID = aiHandle.getControllingPlayerUUID();
+            if (playerUUID == null) {
                 // AI-контроль — убираем player handle если был
                 if (playerHandles.containsKey(trainId)) {
                     updatePlayerControl(trainId, null, null);
@@ -227,26 +231,17 @@ public final class EcosystemRegistry {
                 continue;
             }
 
-            // Поезд управляется игроком — ищем кто именно
-            UUID playerUUID = aiHandle.getControllingPlayerUUID();
-            if (playerUUID == null) {
-                // manualTick=true но UUID неизвестен — сканируем пассажиров
-                ServerPlayer found = findPlayerInTrain(level, aiHandle);
-                if (found != null) {
-                    playerUUID = found.getUUID();
-                    updatePlayerControl(trainId, playerUUID, found);
-                    stillControlledBuf.add(trainId);
-                }
-            } else {
-                net.minecraft.world.entity.player.Player raw = level.getPlayerByUUID(playerUUID);
-                ServerPlayer p = (raw instanceof ServerPlayer sp) ? sp : null;
-                updatePlayerControl(trainId, playerUUID, p);
-                stillControlledBuf.add(trainId);
-            }
+            net.minecraft.world.entity.player.Player raw = level.getPlayerByUUID(playerUUID);
+            ServerPlayer p = (raw instanceof ServerPlayer sp) ? sp : null;
+            updatePlayerControl(trainId, playerUUID, p);
+            stillControlledBuf.add(trainId);
         }
 
         // Удаляем устаревшие player handles
-        playerHandles.keySet().removeIf(id -> !stillControlledBuf.contains(id));
+        Iterator<UUID> iterator = playerHandles.keySet().iterator();
+        while (iterator.hasNext()) {
+            if (!stillControlledBuf.contains(iterator.next())) iterator.remove();
+        }
     }
 
     @Nullable

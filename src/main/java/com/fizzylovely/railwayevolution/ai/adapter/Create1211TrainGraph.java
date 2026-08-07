@@ -32,10 +32,10 @@ public final class Create1211TrainGraph implements ITrainGraph {
     private final Object graphRef; // com.simibubi.create.content.trains.graph.TrackGraph
 
     // ─── Пул объектов для getEdgesFrom (нет аллокаций в горячем пути) ────
-    private static final int EDGE_POOL_SIZE = 16;
-    private final EdgeEntryImpl[] edgePool  = new EdgeEntryImpl[EDGE_POOL_SIZE];
-    private final EdgeImpl[]      edgeImplPool = new EdgeImpl[EDGE_POOL_SIZE];
-    private final List<IGraphEdgeEntry> edgeList = new ArrayList<>(EDGE_POOL_SIZE);
+    private static final int INITIAL_EDGE_POOL_SIZE = 16;
+    private EdgeEntryImpl[] edgePool  = new EdgeEntryImpl[INITIAL_EDGE_POOL_SIZE];
+    private EdgeImpl[]      edgeImplPool = new EdgeImpl[INITIAL_EDGE_POOL_SIZE];
+    private final List<IGraphEdgeEntry> edgeList = new ArrayList<>(INITIAL_EDGE_POOL_SIZE);
 
     // ─── Static MethodHandles (один раз) ──────────────────────────────────
     private static volatile boolean INIT_DONE = false;
@@ -43,6 +43,9 @@ public final class Create1211TrainGraph implements ITrainGraph {
     private static MethodHandle MH_NODE_DEGREE;
     private static MethodHandle MH_NODE_GET_LOCATION;    // TrackNodeLocation (extends Vec3i)
     private static VarHandle    VH_EDGE_LENGTH;
+    private static MethodHandle MH_EDGE_GET_LENGTH;
+    private static VarHandle    VH_EDGE_NODE1;
+    private static VarHandle    VH_EDGE_NODE2;
     private static VarHandle    VH_EDGE_TURN;            // BezierConnection
     private static MethodHandle MH_BEZIER_SAMPLE;        // BezierConnection.getPosition(t) → Vec3
 
@@ -50,7 +53,7 @@ public final class Create1211TrainGraph implements ITrainGraph {
 
     public Create1211TrainGraph(Object graphRef) {
         this.graphRef = graphRef;
-        for (int i = 0; i < EDGE_POOL_SIZE; i++) {
+        for (int i = 0; i < INITIAL_EDGE_POOL_SIZE; i++) {
             edgePool[i]     = new EdgeEntryImpl();
             edgeImplPool[i] = new EdgeImpl();
         }
@@ -79,7 +82,7 @@ public final class Create1211TrainGraph implements ITrainGraph {
 
                 // Пропускаем назад (откуда пришли)
                 if (neighborNode == exceptNodeRef) continue;
-                if (idx >= EDGE_POOL_SIZE) break;
+                ensureEdgePoolCapacity(idx + 1);
 
                 EdgeImpl    edgeImpl  = edgeImplPool[idx];
                 EdgeEntryImpl entry   = edgePool[idx];
@@ -93,6 +96,24 @@ public final class Create1211TrainGraph implements ITrainGraph {
             CreateRailwayMod.aiDebug("[Graph] getEdgesFrom error: {}", t.getMessage());
         }
         return edgeList;
+    }
+
+    /** Grow once for unusually complex junctions instead of silently dropping routes. */
+    private void ensureEdgePoolCapacity(int required) {
+        if (required <= edgePool.length) return;
+
+        int oldSize = edgePool.length;
+        int newSize = Math.max(required, oldSize * 2);
+        EdgeEntryImpl[] newEntries = new EdgeEntryImpl[newSize];
+        EdgeImpl[] newEdges = new EdgeImpl[newSize];
+        System.arraycopy(edgePool, 0, newEntries, 0, oldSize);
+        System.arraycopy(edgeImplPool, 0, newEdges, 0, oldSize);
+        for (int i = oldSize; i < newSize; i++) {
+            newEntries[i] = new EdgeEntryImpl();
+            newEdges[i] = new EdgeImpl();
+        }
+        edgePool = newEntries;
+        edgeImplPool = newEdges;
     }
 
     @Override
@@ -159,10 +180,7 @@ public final class Create1211TrainGraph implements ITrainGraph {
             if (nativeEdge == edge && bound) return; // не перечитываем если тот же объект
             nativeEdge = edge;
             bound = true;
-            if (VH_EDGE_LENGTH != null) {
-                try { cachedLength = (double) VH_EDGE_LENGTH.get(edge); }
-                catch (Exception e) { cachedLength = 1.0; }
-            }
+            cachedLength = readEdgeLength(edge);
             if (VH_EDGE_TURN != null) {
                 try { cachedCurve = VH_EDGE_TURN.get(edge) != null; }
                 catch (Exception e) { cachedCurve = false; }
@@ -190,6 +208,47 @@ public final class Create1211TrainGraph implements ITrainGraph {
                 return pts;
             } catch (Throwable e) { return Collections.emptyList(); }
         }
+    }
+
+    /**
+     * Create 6.x exposes TrackEdge length through getLength(), while older mappings
+     * may expose a field. Never let a missing optional representation disable graph
+     * initialization; the node-to-node distance is a safe final fallback.
+     */
+    private static double readEdgeLength(Object edge) {
+        if (edge == null) return 1.0;
+        if (MH_EDGE_GET_LENGTH != null) {
+            try {
+                Object value = MH_EDGE_GET_LENGTH.invoke(edge);
+                if (value instanceof Number number && number.doubleValue() >= 0.0) {
+                    return number.doubleValue();
+                }
+            } catch (Throwable ignored) { }
+        }
+        if (VH_EDGE_LENGTH != null) {
+            try {
+                Object value = VH_EDGE_LENGTH.get(edge);
+                if (value instanceof Number number && number.doubleValue() >= 0.0) {
+                    return number.doubleValue();
+                }
+            } catch (Throwable ignored) { }
+        }
+        if (VH_EDGE_NODE1 != null && VH_EDGE_NODE2 != null && MH_NODE_GET_LOCATION != null) {
+            try {
+                Object node1 = VH_EDGE_NODE1.get(edge);
+                Object node2 = VH_EDGE_NODE2.get(edge);
+                Object loc1 = MH_NODE_GET_LOCATION.invoke(node1);
+                Object loc2 = MH_NODE_GET_LOCATION.invoke(node2);
+                if (loc1 instanceof net.minecraft.core.Vec3i a
+                        && loc2 instanceof net.minecraft.core.Vec3i b) {
+                    double dx = a.getX() - b.getX();
+                    double dy = a.getY() - b.getY();
+                    double dz = a.getZ() - b.getZ();
+                    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+                }
+            } catch (Throwable ignored) { }
+        }
+        return 1.0;
     }
 
     // ─── Pooled EdgeEntry ─────────────────────────────────────────────────
@@ -234,12 +293,17 @@ public final class Create1211TrainGraph implements ITrainGraph {
                 MethodType.methodType(
                     Class.forName("com.simibubi.create.content.trains.graph.TrackNodeLocation")));
 
-            // TrackEdge fields
+            // TrackEdge length changed between Create versions. In Create 6.0.10 it
+            // is computed by public getLength(), not stored in a length field.
             Class<?> edgeCls = Class.forName(
                 "com.simibubi.create.content.trains.graph.TrackEdge");
             MethodHandles.Lookup edgeLookup = MethodHandles.privateLookupIn(
                 edgeCls, MethodHandles.lookup());
-            VH_EDGE_LENGTH = edgeLookup.findVarHandle(edgeCls, "length", double.class);
+            MH_EDGE_GET_LENGTH = safeMH(edgeLookup, edgeCls, "getLength",
+                MethodType.methodType(double.class));
+            VH_EDGE_LENGTH = safeVH(edgeLookup, edgeCls, "length");
+            VH_EDGE_NODE1 = safeVH(edgeLookup, edgeCls, "node1");
+            VH_EDGE_NODE2 = safeVH(edgeLookup, edgeCls, "node2");
             VH_EDGE_TURN   = safeVH(edgeLookup, edgeCls, "turn");
 
             // BezierConnection.getPosition(float t) → Vec3
@@ -259,7 +323,7 @@ public final class Create1211TrainGraph implements ITrainGraph {
 
             CreateRailwayMod.aiLog("[Adapter] Create1211TrainGraph static init OK");
         } catch (Exception e) {
-            CreateRailwayMod.LOGGER.warn("[Adapter] Graph init partial: {}", e.getMessage());
+            CreateRailwayMod.LOGGER.warn("[Adapter] Graph init partial; graph fallbacks remain active", e);
         } finally {
             INIT_DONE = true;
         }
@@ -273,6 +337,16 @@ public final class Create1211TrainGraph implements ITrainGraph {
             f.setAccessible(true);
             return MethodHandles.privateLookupIn(cls, MethodHandles.lookup()).unreflectVarHandle(f);
         } catch (Exception e) { return null; }
+    }
+
+    @Nullable
+    private static MethodHandle safeMH(MethodHandles.Lookup lookup, Class<?> cls,
+                                       String name, MethodType type) {
+        try {
+            return lookup.findVirtual(cls, name, type);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Nullable

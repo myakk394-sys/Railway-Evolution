@@ -3,7 +3,6 @@ package com.fizzylovely.railwayevolution.ai;
 import com.fizzylovely.railwayevolution.CreateRailwayMod;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -50,8 +49,8 @@ public class JunctionReservationManager {
         }
     }
 
-    // Junction key → reservation
-    private final ConcurrentHashMap<Long, Reservation> reservations = new ConcurrentHashMap<>();
+    // Dimension-qualified junction key → reservation.
+    private final ConcurrentHashMap<JunctionKey, Reservation> reservations = new ConcurrentHashMap<>();
 
     public static JunctionReservationManager getInstance() { return INSTANCE; }
 
@@ -60,13 +59,32 @@ public class JunctionReservationManager {
     // ── Core API ──────────────────────────────────────────────────────────────
 
     /**
-     * Pack junction coordinates into a long key (block precision).
+     * v1.0.8 Fix #7: Pack junction coordinates into a long key WITH Y.
+     * Bit layout: [10 bits Y | 22 bits X | 32 bits Z]
+     * Separates stacked junctions (metro under bridges, multi-level stations).
      */
-    public static long packKey(int x, int z) {
-        return ((long) x << 32) | (z & 0xFFFFFFFFL);
+    public static long packKey(int x, int y, int z) {
+        long yBits = ((long) (y & 0x3FF)) << 54;      // Y in top 10 bits
+        long xBits = ((long) (x & 0x3FFFFF)) << 32;    // X in middle 22 bits
+        long zBits = (z & 0xFFFFFFFFL);                 // Z in bottom 32 bits
+        return yBits | xBits | zBits;
     }
+    public static long packKey(double x, double y, double z) {
+        return packKey((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
+    }
+
+    public static JunctionKey key(String dimensionId, long packedPosition) {
+        return new JunctionKey(dimensionId, packedPosition);
+    }
+    /** @deprecated Use 3-arg packKey(x, y, z) for proper Y-separation. */
+    @Deprecated
+    public static long packKey(int x, int z) {
+        return packKey(x, 0, z);
+    }
+    /** @deprecated Use 3-arg packKey(x, y, z) for proper Y-separation. */
+    @Deprecated
     public static long packKey(double x, double z) {
-        return packKey((int) Math.floor(x), (int) Math.floor(z));
+        return packKey(x, 0, z);
     }
 
     /**
@@ -78,7 +96,7 @@ public class JunctionReservationManager {
      * @param myDist      distance from this train to the junction (blocks)
      * @return GRANTED if we now hold the reservation, DENIED if another closer train holds it
      */
-    public ReserveResult tryReserve(long junctionKey, UUID trainId, long currentTick, double myDist) {
+    public ReserveResult tryReserve(JunctionKey junctionKey, UUID trainId, long currentTick, double myDist) {
         Reservation existing = reservations.get(junctionKey);
 
         // ── No reservation or expired → grant immediately ──
@@ -120,6 +138,11 @@ public class JunctionReservationManager {
         return ReserveResult.denied(existing.trainId);
     }
 
+    /** Legacy Overworld-compatible overload. Prefer dimension-qualified keys. */
+    public ReserveResult tryReserve(long junctionKey, UUID trainId, long currentTick, double myDist) {
+        return tryReserve(key("minecraft:overworld", junctionKey), trainId, currentTick, myDist);
+    }
+
     /**
      * Legacy overload (no distance — uses MAX_VALUE so newer trains always steal).
      * Used by old call sites that haven't been updated yet.
@@ -156,7 +179,7 @@ public class JunctionReservationManager {
 
     // ── Release ───────────────────────────────────────────────────────────────
 
-    public void release(long junctionKey, UUID trainId) {
+    public void release(JunctionKey junctionKey, UUID trainId) {
         Reservation existing = reservations.get(junctionKey);
         if (existing != null && existing.trainId.equals(trainId)) {
             reservations.remove(junctionKey);
@@ -165,20 +188,24 @@ public class JunctionReservationManager {
         }
     }
 
+    public void release(long junctionKey, UUID trainId) {
+        release(key("minecraft:overworld", junctionKey), trainId);
+    }
+
     public void releaseAll(UUID trainId) {
         reservations.entrySet().removeIf(e -> e.getValue().trainId.equals(trainId));
     }
 
     // ── Queries ───────────────────────────────────────────────────────────────
 
-    public boolean isReservedByOther(long junctionKey, UUID myTrainId, long currentTick) {
+    public boolean isReservedByOther(JunctionKey junctionKey, UUID myTrainId, long currentTick) {
         Reservation existing = reservations.get(junctionKey);
         if (existing == null) return false;
         if (currentTick > existing.expiresAtTick) return false;
         return !existing.trainId.equals(myTrainId);
     }
 
-    public UUID getHolder(long junctionKey, long currentTick) {
+    public UUID getHolder(JunctionKey junctionKey, long currentTick) {
         Reservation existing = reservations.get(junctionKey);
         if (existing == null || currentTick > existing.expiresAtTick) return null;
         return existing.trainId;
@@ -190,4 +217,6 @@ public class JunctionReservationManager {
 
     public int  size()  { return reservations.size(); }
     public void clear() { reservations.clear(); }
+
+    public record JunctionKey(String dimensionId, long packedPosition) {}
 }

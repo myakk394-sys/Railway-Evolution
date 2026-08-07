@@ -31,20 +31,17 @@ public class StoppedTrainRegistry {
 
     private static final StoppedTrainRegistry INSTANCE = new StoppedTrainRegistry();
 
-    /**
-     * Immutable snapshot of a stopped/crashed train's state.
-     * Recreated every tick the train remains stopped (positions may drift slightly).
-     */
+    /** Reused entry updated in place while a train remains stopped. */
     public static class StoppedTrain {
         public final UUID trainId;
-        public final Vec3 precisePosition;   // sub-block accurate position
-        public final BlockPos blockPosition; // block-level position
-        public final int trainLength;        // total length in blocks
-        public final double headingX;        // normalized heading vector
-        public final double headingZ;
-        public final boolean derailed;       // true = crashed/derailed train
+        public Vec3 precisePosition;   // sub-block accurate position
+        public BlockPos blockPosition; // block-level position
+        public int trainLength;        // total length in blocks
+        public double headingX;        // normalized heading vector
+        public double headingZ;
+        public boolean derailed;       // true = crashed/derailed train
         public final long stoppedSinceTick;  // game tick when the train first stopped
-        public final Object graphRef;        // Train.graph reference for same-network filtering
+        public Object graphRef;        // Train.graph reference for same-network filtering
 
         public StoppedTrain(UUID trainId, Vec3 precisePosition, BlockPos blockPosition,
                             int trainLength, double headingX, double headingZ,
@@ -57,6 +54,17 @@ public class StoppedTrainRegistry {
             this.headingZ = headingZ;
             this.derailed = derailed;
             this.stoppedSinceTick = stoppedSinceTick;
+            this.graphRef = graphRef;
+        }
+
+        void update(Vec3 precisePosition, BlockPos blockPosition, int trainLength,
+                    double headingX, double headingZ, boolean derailed, Object graphRef) {
+            this.precisePosition = precisePosition;
+            this.blockPosition = blockPosition;
+            this.trainLength = trainLength;
+            this.headingX = headingX;
+            this.headingZ = headingZ;
+            this.derailed = derailed;
             this.graphRef = graphRef;
         }
     }
@@ -86,10 +94,15 @@ public class StoppedTrainRegistry {
             // Train is stopped or crashed → register/update
             StoppedTrain existing = registry.get(trainId);
             long stoppedSince = (existing != null) ? existing.stoppedSinceTick : currentTick;
-            registry.put(trainId, new StoppedTrain(
-                    trainId, precisePosition, blockPosition,
-                    trainLength, headingX, headingZ,
-                    derailed, stoppedSince, graphRef));
+            if (existing == null) {
+                registry.put(trainId, new StoppedTrain(
+                        trainId, precisePosition, blockPosition,
+                        trainLength, headingX, headingZ,
+                        derailed, stoppedSince, graphRef));
+            } else {
+                existing.update(precisePosition, blockPosition, trainLength,
+                        headingX, headingZ, derailed, graphRef);
+            }
         } else {
             // Train is moving → remove from registry
             if (registry.remove(trainId) != null) {

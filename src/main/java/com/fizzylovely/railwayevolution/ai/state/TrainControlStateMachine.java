@@ -94,11 +94,12 @@ public final class TrainControlStateMachine {
         // Применяем к текущей скорости (не к запрошенной командой)
         // чтобы поймать залипший overlap/derail
         SafetyManager.SafetyResult preCheck = safety.evaluate(ctx, ctx.speed);
-        if (preCheck.blocks()) {
+        if (preCheck.blocks()
+                || preCheck.verdict() == SafetyManager.Verdict.CLAMP_SPEED
+                || preCheck.verdict() == SafetyManager.Verdict.EMERGENCY_FOLLOW_BRAKE) {
             safety.applyVerdict(preCheck, ctx);
-            // Не прерываем тик — состояния могут делать дополнительные проверки
-        } else if (preCheck.verdict() == SafetyManager.Verdict.EMERGENCY_FOLLOW_BRAKE) {
-            safety.applyVerdict(preCheck, ctx);
+            // Safety is the top authority: no state may overwrite this tick's speed.
+            return;
         }
 
         // ── LAYER 2: AI State Machine ────────────────────────────────────

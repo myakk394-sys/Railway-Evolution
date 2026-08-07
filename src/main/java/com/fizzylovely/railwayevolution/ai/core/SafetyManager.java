@@ -1,5 +1,7 @@
 package com.fizzylovely.railwayevolution.ai.core;
 
+import java.util.UUID;
+
 /**
  * SafetyManager — единственный хранитель права на вето команды скорости.
  *
@@ -79,6 +81,7 @@ public final class SafetyManager {
 
     // Tracked для детектирования резкого торможения лидера
     private double prevLeaderSpeed = Double.NaN;
+    private UUID prevLeaderId;
 
     // ──────────────────────────────────────────────────────────────────────
 
@@ -94,7 +97,7 @@ public final class SafetyManager {
 
         // ── VETO 1: Сход с рельс — полная блокировка, включая игрока ──────
         if (ctx.derailed) {
-            prevLeaderSpeed = Double.NaN;
+            resetLeaderTracking();
             return new SafetyResult(Verdict.VETO_DERAIL, 0);
         }
 
@@ -103,7 +106,7 @@ public final class SafetyManager {
         // ── VETO 2: Физическое перекрытие — блокируем даже игрока ──────────
         if (obs != null && obs.hasObstacle() && obs.isOverlapping
                 && requestedSpeed > 0) {
-            prevLeaderSpeed = Double.NaN;
+            resetLeaderTracking();
             return new SafetyResult(Verdict.VETO_COLLISION, 0);
         }
 
@@ -117,7 +120,7 @@ public final class SafetyManager {
 
         // ── Нет препятствия → разрешаем ────────────────────────────────────
         if (obs == null || !obs.hasObstacle()) {
-            prevLeaderSpeed = Double.NaN;
+            resetLeaderTracking();
             return SafetyResult.ALLOW_FULL;
         }
 
@@ -136,19 +139,22 @@ public final class SafetyManager {
         if (obs.isFlowCandidate || obs.isDeparting) {
             double leaderSpeed = obs.obstacleSpeed;
 
-            if (!Double.isNaN(prevLeaderSpeed)) {
+            if (obs.obstacleId != null && obs.obstacleId.equals(prevLeaderId)
+                    && !Double.isNaN(prevLeaderSpeed)) {
                 double leaderDecel = prevLeaderSpeed - leaderSpeed; // > 0 = тормозит
 
                 if (leaderDecel > LEADER_DECEL_THRESHOLD) {
                     // Лидер резко затормозил — экстренная реакция
                     double emergencyTarget = leaderSpeed * EMERGENCY_FOLLOW_SPEED_FACTOR;
                     prevLeaderSpeed = leaderSpeed;
+                    prevLeaderId = obs.obstacleId;
                     return new SafetyResult(Verdict.EMERGENCY_FOLLOW_BRAKE, emergencyTarget);
                 }
             }
             prevLeaderSpeed = leaderSpeed;
+            prevLeaderId = obs.obstacleId;
         } else {
-            prevLeaderSpeed = Double.NaN;
+            resetLeaderTracking();
         }
 
         return SafetyResult.ALLOW_FULL;
@@ -180,7 +186,8 @@ public final class SafetyManager {
             case EMERGENCY_FOLLOW_BRAKE -> {
                 double current = Math.abs(ctx.speed);
                 if (current > result.maxAllowedSpeed) {
-                    ctx.selfHandle.setSpeed(result.maxAllowedSpeed);
+                    double sign = ctx.speed >= 0 ? 1 : -1;
+                    ctx.selfHandle.setSpeed(result.maxAllowedSpeed * sign);
                     ctx.selfHandle.setThrottle(
                         result.maxAllowedSpeed / Math.max(0.01, ctx.maxSpeed));
                 }
@@ -192,5 +199,6 @@ public final class SafetyManager {
     /** Сброс истории скорости лидера при смене состояния. */
     public void resetLeaderTracking() {
         prevLeaderSpeed = Double.NaN;
+        prevLeaderId = null;
     }
 }

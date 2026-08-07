@@ -33,7 +33,7 @@ public class VirtualBlockSystem {
 
     private static VirtualBlockSystem instance;
 
-    /** segmentKey -> active reservation */
+    /** dimension-qualified segment key -> active reservation */
     private final Map<String, TrackReservation> reservations = new ConcurrentHashMap<>();
 
     /** trainId -> list of segment keys that train has reserved */
@@ -64,8 +64,13 @@ public class VirtualBlockSystem {
      */
     public ReservationResult tryReserve(UUID trainId, BlockPos segmentStart, BlockPos segmentEnd,
                                          boolean forward, long currentTick) {
+        return tryReserve("minecraft:overworld", trainId, segmentStart, segmentEnd, forward, currentTick);
+    }
+
+    public ReservationResult tryReserve(String dimensionId, UUID trainId, BlockPos segmentStart, BlockPos segmentEnd,
+                                         boolean forward, long currentTick) {
         long ttl = RailwayConfig.reservationTTLTicks.get();
-        String key = makeSegmentKey(segmentStart, segmentEnd);
+        String key = makeSegmentKey(dimensionId, segmentStart, segmentEnd);
 
         TrackReservation existing = reservations.get(key);
 
@@ -243,10 +248,14 @@ public class VirtualBlockSystem {
      * This is a static utility so callers don't need a TrackReservation object.
      */
     public static String makeSegmentKey(BlockPos a, BlockPos b) {
+        return makeSegmentKey("minecraft:overworld", a, b);
+    }
+
+    public static String makeSegmentKey(String dimensionId, BlockPos a, BlockPos b) {
         int cmp = a.compareTo(b);
         BlockPos first = cmp <= 0 ? a : b;
         BlockPos second = cmp <= 0 ? b : a;
-        return first.toShortString() + "|" + second.toShortString();
+        return dimensionId + "|" + first.toShortString() + "|" + second.toShortString();
     }
 
     private void commitReservation(String key, TrackReservation reservation, UUID trainId) {

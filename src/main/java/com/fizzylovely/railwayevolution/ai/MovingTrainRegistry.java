@@ -34,23 +34,36 @@ public class MovingTrainRegistry {
     private static final MovingTrainRegistry INSTANCE = new MovingTrainRegistry();
 
     /**
-     * Snapshot of a moving train's state, updated every tick.
+     * Reused entry updated in place while a train remains moving.
      */
     public static class MovingTrain {
         public final UUID trainId;
-        public final Vec3 precisePosition;
-        public final BlockPos blockPosition;
-        public final int trainLength;
-        public final double headingX;        // normalized heading
-        public final double headingZ;
-        public final double speed;           // blocks/tick
-        public final Object graphRef;        // Train.graph for same-network filtering
-        public final long lastUpdateTick;    // tick when this entry was last updated
+        public Vec3 precisePosition;
+        public BlockPos blockPosition;
+        public int trainLength;
+        public double headingX;        // normalized heading
+        public double headingZ;
+        public double speed;           // blocks/tick
+        public Object graphRef;        // Train.graph for same-network filtering
+        public long lastUpdateTick;    // tick when this entry was last updated
 
         public MovingTrain(UUID trainId, Vec3 precisePosition, BlockPos blockPosition,
                            int trainLength, double headingX, double headingZ,
                            double speed, Object graphRef, long lastUpdateTick) {
             this.trainId = trainId;
+            this.precisePosition = precisePosition;
+            this.blockPosition = blockPosition;
+            this.trainLength = trainLength;
+            this.headingX = headingX;
+            this.headingZ = headingZ;
+            this.speed = speed;
+            this.graphRef = graphRef;
+            this.lastUpdateTick = lastUpdateTick;
+        }
+
+        void update(Vec3 precisePosition, BlockPos blockPosition, int trainLength,
+                    double headingX, double headingZ, double speed,
+                    Object graphRef, long lastUpdateTick) {
             this.precisePosition = precisePosition;
             this.blockPosition = blockPosition;
             this.trainLength = trainLength;
@@ -95,10 +108,16 @@ public class MovingTrainRegistry {
 
         if (speed >= 0.02 && !derailed) {
             // Train is moving → register/update
-            registry.put(trainId, new MovingTrain(
-                    trainId, precisePosition, blockPosition,
-                    trainLength, headingX, headingZ,
-                    speed, graphRef, currentTick));
+            MovingTrain existing = registry.get(trainId);
+            if (existing == null) {
+                registry.put(trainId, new MovingTrain(
+                        trainId, precisePosition, blockPosition,
+                        trainLength, headingX, headingZ,
+                        speed, graphRef, currentTick));
+            } else {
+                existing.update(precisePosition, blockPosition, trainLength,
+                        headingX, headingZ, speed, graphRef, currentTick);
+            }
         } else {
             // Train stopped or crashed → remove from moving registry
             registry.remove(trainId);

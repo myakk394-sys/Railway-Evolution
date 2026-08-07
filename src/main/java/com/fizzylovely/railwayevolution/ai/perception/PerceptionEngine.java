@@ -206,6 +206,11 @@ public final class PerceptionEngine {
 
                 // Добавляем в очередь BFS
                 if (newDist < maxRange) {
+                    // Never let the ring overwrite an unread entry. The current edge
+                    // was still scanned above; only deeper traversal is truncated.
+                    if (bfsTail - bfsHead >= BFS_QUEUE_SIZE) {
+                        continue;
+                    }
                     BfsNodeEntry next = bfsQueue[bfsTail & (BFS_QUEUE_SIZE - 1)];
                     next.nodeRef   = nextNode;
                     next.prevRef   = curNode;
@@ -217,10 +222,6 @@ public final class PerceptionEngine {
         }
     }
 
-    /**
-     * Проверить ребро графа на наличие поезда-кандидата.
-     * Если нашли — обновляем result через updateIfCloser (нет аллокаций).
-     */
     private void checkEdgeForTrains(
             ITrainHandle self,
             ITrackEdge edge, Object fromNode, Object toNode,
@@ -233,11 +234,24 @@ public final class PerceptionEngine {
             ITrainHandle candidate = allHandles[i];
             if (candidate == self) continue;
 
+            // v1.0.8 Fix #10: Check BOTH leading and trailing edge
             Object candidateEdge = candidate.getLeadingEdgeRef();
-            if (candidateEdge == null || candidateEdge != edgeNative) continue;
+            Object candidateTrailEdge = candidate.getTrailingEdgeRef();
+            boolean leadingMatch  = (candidateEdge != null && candidateEdge == edgeNative);
+            boolean trailingMatch = (candidateTrailEdge != null && candidateTrailEdge == edgeNative);
+            if (!leadingMatch && !trailingMatch) continue;
 
-            // Нашли поезд на этом ребре
-            double candidateDist  = distAtEdgeWithPosition(edge, candidate, distAtEndOfEdge);
+            // Use the nearest occupied point on this edge. A long train can span the
+            // scanned edge with its tail after its head has entered the next edge.
+            double candidateDist;
+            double leadingDist = leadingMatch
+                    ? distAtEdgeWithPosition(edge, candidate, distAtEndOfEdge)
+                    : Double.MAX_VALUE;
+            double trailingDist = trailingMatch
+                    ? distAtEdgeWithPosition(edge, candidate.getTrailingEdgePosition(), distAtEndOfEdge)
+                    : Double.MAX_VALUE;
+            candidateDist = Math.min(leadingDist, trailingDist);
+
             double mySpeed        = Math.abs(ctx.speed);
             double candidateSpeed = Math.abs(candidate.getSpeed());
             double closingSpeed   = isReverseCheck
@@ -273,6 +287,9 @@ public final class PerceptionEngine {
         List<net.minecraft.world.phys.Vec3> points = edge.sampleCurve(BEZIER_SAMPLES);
         if (points == null || points.size() < 2) return;
 
+        // v1.0.8 Fix #13: Cache self graph for identity check
+        ITrainGraph myGraph = self.getGraph();
+
         for (int p = 1; p < points.size() - 1; p++) {
             net.minecraft.world.phys.Vec3 pt = points.get(p);
             double tParam = (double) p / (points.size() - 1);
@@ -282,6 +299,11 @@ public final class PerceptionEngine {
             for (int i = 0; i < allHandlesCount; i++) {
                 ITrainHandle candidate = allHandles[i];
                 if (candidate == self) continue;
+
+                // v1.0.8 Fix #13: Skip trains on different graphs (parallel curves)
+                if (!sharesTrackGraph(myGraph, candidate)) {
+                    continue;
+                }
 
                 net.minecraft.world.phys.Vec3 candPos = candidate.getLeadingPosition();
                 if (candPos == null) continue;
@@ -324,8 +346,16 @@ public final class PerceptionEngine {
         double hx = ctx.headingX;
         double hz = ctx.headingZ;
 
+        // v1.0.8 Fix #12: Cache self graph for identity check
+        ITrainGraph myGraph = self.getGraph();
+
         for (ITrainHandle candidate : candidates) {
             if (candidate.getId().equals(self.getId())) continue;
+
+            // v1.0.8 Fix #12: Skip trains on different graphs (parallel tracks)
+            if (!sharesTrackGraph(myGraph, candidate)) {
+                continue;
+            }
 
             net.minecraft.world.phys.Vec3 cPos = candidate.getLeadingPosition();
             if (cPos == null) continue;
@@ -354,8 +384,33 @@ public final class PerceptionEngine {
 
             double mySpeed   = Math.abs(ctx.speed);
             double cSpeed    = Math.abs(candidate.getSpeed());
-            double closing   = mySpeed - cSpeed * dot; // проекция скорости кандидата
-            boolean isDep    = cSpeed * dot >= mySpeed - 0.01;
+
+            // Derive the other train's own travel vector from its physical extent.
+            // The vector is reversed when Create reports a negative speed.
+            net.minecraft.world.phys.Vec3 cTrail = candidate.getTrailingPosition();
+            boolean candidateHeadOn = false;
+            if (cTrail != null) {
+                double chx = cPos.x - cTrail.x;
+                double chz = cPos.z - cTrail.z;
+                double cLen = Math.sqrt(chx * chx + chz * chz);
+                if (cLen > 0.5) {
+                    chx /= cLen; chz /= cLen;
+                    if (candidate.getSpeed() < -0.02) {
+                        chx = -chx;
+                        chz = -chz;
+                    }
+                    // Dot of OUR heading with CANDIDATE heading
+                    // Negative → facing each other → head-on
+                    double headingDot = hx * chx + hz * chz;
+                    candidateHeadOn = headingDot < -0.3; // ~107° cone
+                }
+            }
+
+            // v1.0.8 Fix #9: Recalculate closing speed for head-on
+            double closing = candidateHeadOn
+                ? mySpeed + cSpeed      // approaching each other
+                : mySpeed - cSpeed * dot; // same direction
+            boolean isDep = !candidateHeadOn && closing <= 0.01;
 
             // Только обновляем если ближе чем текущий BFS-результат
             // (BFS точнее — не перебиваем его физическим без весомой причины)
@@ -364,7 +419,7 @@ public final class PerceptionEngine {
                     candidate.getId(), candidate.isPlayerControlled(),
                     Math.max(0, physDist),
                     cSpeed, closing,
-                    false, isDep,
+                    candidateHeadOn, isDep,
                     false, false // не graph-based
                 );
             }
@@ -392,12 +447,23 @@ public final class PerceptionEngine {
     /** Вычислить дистанцию от нашей позиции до поезда на данном ребре. */
     private double distAtEdgeWithPosition(ITrackEdge edge, ITrainHandle candidate,
                                           double distAtEndOfEdge) {
-        double candEdgePos = candidate.getLeadingEdgePosition();
+        return distAtEdgeWithPosition(edge, candidate.getLeadingEdgePosition(), distAtEndOfEdge);
+    }
+
+    private double distAtEdgeWithPosition(ITrackEdge edge, double edgePosition,
+                                          double distAtEndOfEdge) {
         // Поезд находится на расстоянии candEdgePos от node1 ребра.
         // distAtEndOfEdge = дистанция от нас до конца ребра (node2).
         // Дистанция до поезда = distAtEndOfEdge - (edgeLength - candEdgePos)
-        double distInEdge = edge.getLength() - candEdgePos;
+        double distInEdge = edge.getLength() - edgePosition;
         return distAtEndOfEdge - distInEdge;
+    }
+
+    /** Physical scans are only allowed to bridge trains known to share a TrackGraph. */
+    private boolean sharesTrackGraph(@Nullable ITrainGraph myGraph, ITrainHandle candidate) {
+        if (myGraph == null) return true;
+        ITrainGraph candidateGraph = candidate.getGraph();
+        return candidateGraph != null && myGraph.getNativeRef() == candidateGraph.getNativeRef();
     }
 
     /** Является ли поезд в тупике (parking zone / депо). */
@@ -412,16 +478,48 @@ public final class PerceptionEngine {
         return false;
     }
 
-    // ─── Version-based visited set ────────────────────────────────────────
+    // ─── Version-based visited set with open addressing (v1.0.8 Fix #4) ────
+    // Pre-v1.0.8: simple hash → version, no collision handling.
+    // Two nodes with identityHashCode(a) & 1023 == identityHashCode(b) & 1023
+    // would collide silently → BFS skipped entire graph branches.
+    // Now: linear probing with MAX_PROBES, storing nodeRef for identity check.
+
+    private static final int MAX_PROBES = 8;
+    private final Object[] visitedNodeRef = new Object[VISITED_SIZE];
 
     private void markVisited(Object nodeRef) {
-        int idx = System.identityHashCode(nodeRef) & (VISITED_SIZE - 1);
-        visitedVersion[idx] = scanVersion;
+        int hash = System.identityHashCode(nodeRef) & (VISITED_SIZE - 1);
+        for (int probe = 0; probe < MAX_PROBES; probe++) {
+            int idx = (hash + probe) & (VISITED_SIZE - 1);
+            if (visitedVersion[idx] != scanVersion) {
+                // Empty slot (stale version) — claim it
+                visitedVersion[idx] = scanVersion;
+                visitedNodeRef[idx] = nodeRef;
+                return;
+            }
+            if (visitedNodeRef[idx] == nodeRef) {
+                return; // Already marked by this scan
+            }
+            // Collision — try next slot
+        }
+        // MAX_PROBES exhausted — overwrite first slot (best effort)
+        visitedVersion[hash] = scanVersion;
+        visitedNodeRef[hash] = nodeRef;
     }
 
     private boolean isVisited(Object nodeRef) {
-        int idx = System.identityHashCode(nodeRef) & (VISITED_SIZE - 1);
-        return visitedVersion[idx] == scanVersion;
+        int hash = System.identityHashCode(nodeRef) & (VISITED_SIZE - 1);
+        for (int probe = 0; probe < MAX_PROBES; probe++) {
+            int idx = (hash + probe) & (VISITED_SIZE - 1);
+            if (visitedVersion[idx] != scanVersion) {
+                return false; // Empty slot — definitely not visited
+            }
+            if (visitedNodeRef[idx] == nodeRef) {
+                return true; // Found by identity
+            }
+            // Collision with different node — keep probing
+        }
+        return false; // Probing exhausted — treat as not visited (safe: may re-visit)
     }
 
     // ─── BFS node entry (пул объектов) ────────────────────────────────────
