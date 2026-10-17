@@ -55,7 +55,7 @@ public class TrackReservation {
         this.active = false;
     }
 
-    // ─── Getters ───
+// Getters
 
     public UUID    getOwnerTrainId()  { return ownerTrainId; }
     public BlockPos getSegmentStart() { return segmentStart; }

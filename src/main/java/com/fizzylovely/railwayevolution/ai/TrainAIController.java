@@ -23,15 +23,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
- * See LICENSE file in the project root for full license information.
  *
  * Train AI Controller — the "brain" of a single train.
  *
  * Integrates with Create Mod's Train, Navigation, Carriage, CarriageBogey,
  * and TravellingPoint classes via reflection.
  *
- * Key Create Mod fields used:
+ * Key Create Mod fields used
  * Train.speed (double) — current speed
  * Train.targetSpeed (double) — target speed set by Navigation
  * Train.carriages (List) — list of Carriage objects
@@ -43,20 +41,19 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class TrainAIController {
 
-    // ── Static per-class reflection cache: avoids repeated hierarchy traversal
-    // every tick ──
-    // Maps className → fieldName → Field / className → methodName → Method
     private static final ConcurrentHashMap<String, ConcurrentHashMap<String, Field>> FIELD_CACHE = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, ConcurrentHashMap<String, Method>> METHOD_CACHE = new ConcurrentHashMap<>();
 
     private final UUID trainId;
+    final String shortId;
+    private final double[] nodeCoordBuf = new double[3];
     private TrainState currentState;
     private TrainState previousState;
     private long stateEnteredTick;
     private long totalWaitTicks;
     private boolean isEmergency;
 
-    // ── Convoy / Following mode ──
+// Convoy / Following mode
     // When we are trailing a train at similar speed with a safe following gap,
     // enter FOLLOWING instead of YIELDING so we continue at matched speed.
     private UUID convoyLeaderId = null; // UUID of the train we are following
@@ -67,18 +64,18 @@ public class TrainAIController {
     private static final double CONVOY_MIN_GAP = 12.0; // min safe gap to follow at (blocks)
     private static final double CONVOY_MAX_GAP = 40.0; // max gap to still follow (blocks)
 
-    // ── Kinematic braking ──
+// Kinematic braking
     // Deceleration constant: 0.06 b/t² ≈ comfortable passenger deceleration.
     // Used to compute required braking distance: d = v²/(2a)
     private static final double DECEL_RATE = 0.0375; // blocks/tick² — Create's default (trainAcceleration=15/400)
     private static final double DECEL_RATE_EMERG = 0.12; // emergency hard-stop deceleration
 
-    // ── Predictive TTC (Time To Collision) ──
+// Predictive TTC (Time To Collision)
     // If the closing speed and gap give TTC < CRITICAL_TTC_TICKS, perform hard
     // stop.
     private static final int CRITICAL_TTC_TICKS = 30; // < 1.5 s TTC → hard stop
 
-    // ── WFC distance history for exit hysteresis ──
+// WFC distance history for exit hysteresis
     // Track the last 3 physical distances to the locked WFC obstacle.
     // Only exit WFC when ALL recent samples are >= BUFFER_CLEARANCE (8 blocks).
     private final double[] wfcDistHistory = { -1, -1, -1 };
@@ -96,7 +93,7 @@ public class TrainAIController {
     @SuppressWarnings("unused")
     private boolean derailed;
 
-    // ── v5: Create API integration fields ──
+// Create API integration fields
     private double maxSpeedWatermark = 1.4;    // Create default: trainTopSpeed=28 → 28/20=1.4 b/t
     private boolean createWaitingForSignal;     // Navigation.waitingForSignal != null
     private double createDistToSignal;          // Navigation.distanceToSignal
@@ -135,14 +132,14 @@ public class TrainAIController {
     private UUID wfcObstacleTrainId = null;
     private static final double BEAM_LATERAL_TOLERANCE = 1.5; // straight track beam
 
-    // ── Junction entry blocking ──
+// Junction entry blocking
     // When BFS says the junction exit is not clear, we stop BEFORE entering.
     // This flag prevents the normal YIELDING → REVERSING escalation: junction
     // congestion is temporary and should NOT trigger a reverse maneuver.
     private boolean junctionEntryBlocked = false;  // true while stopped at junction approach
     private long    junctionEntryBlockedSince = -1; // tick when we first stopped for junction
 
-    // ── v5.3: Junction Yield Invisibility ──
+// Junction Yield Invisibility
     // When we yield at a junction, we store the UUID of the train we're yielding TO.
     // That train's junction checks will see us as "invisible" (skip us), so it can
     // pass through freely without also trying to yield to us → breaks mutual deadlock.
@@ -150,11 +147,11 @@ public class TrainAIController {
     private UUID junctionYieldingToId = null;
     private long junctionYieldingSince = -1;
     private static final double BEAM_LATERAL_TOLERANCE_CURVE = 3.5; // curve / turn beam — wider to catch trains around bends
-    // (v1.0.5: was 1.0 which was TIGHTER than straight — completely wrong!
+    // (: was 1.0 which was TIGHTER than straight — completely wrong!
     // On curves, trains are laterally offset from a straight-line scan ray,
     // so we need a WIDER beam to detect them)
 
-    // ── Priority / Pass-Signal system ──
+// Priority / Pass-Signal system
     // When consecutiveYields >= STARVATION_THRESHOLD, this train earns a
     // priority token: approaching trains yield to IT instead of vice versa.
     // Token is revoked when the train successfully resumes CRUISING.
@@ -163,13 +160,13 @@ public class TrainAIController {
     private static final int  STARVATION_THRESHOLD    = 4;    // yield to 4 trains → earn token
     private static final long PRIORITY_DURATION_TICKS = 200L; // 10 s of right-of-way
 
-    // ── Curve-exit lane merge ──
+// Curve-exit lane merge
     // After leaving a curve/turn edge, reduce speed briefly so main-line
     // trains have time to detect and smoothly brake for the merging train.
     private boolean wasOnCurvedEdge = false; // edge type from last tick
     private long    curveExitTick   = -1;    // when we exited the curve
     private static final int    CURVE_MERGE_TICKS        = 50;  // 2.5 s merge window
-    private static final double CURVE_MERGE_SPEED_FACTOR = 0.70; // v5: raised from 0.55 — Create already slows via maxTurnSpeed()
+    private static final double CURVE_MERGE_SPEED_FACTOR = 0.70; // : raised from 0.55 — Create already slows via maxTurnSpeed()
 
     // Dynamic beam tolerance — updated every tick based on current edge type
     private double currentBeamTolerance = BEAM_LATERAL_TOLERANCE;
@@ -188,7 +185,7 @@ public class TrainAIController {
     private static final int REROUTE_WAIT_TICKS = 40; // 2 s before attempting reroute
     private static final int REROUTE_COOLDOWN_TICKS = 200; // 10 s minimum between reroutes
 
-    // Proactive detour backoff (v1.0.3) — prevents nav-cancel spam when the
+    // Proactive detour backoff () — prevents nav-cancel spam when the
     // alternate
     // branch turns out to be a dead-end/siding that Create can't route through.
     // Cooldown doubles each failed attempt: 200 → 400 → 800 ticks. After 3 retries
@@ -197,7 +194,7 @@ public class TrainAIController {
     private int proactiveDetourRetries = 0;
     private BlockPos proactiveDetourPos = null;
 
-    // Stuck-CRUISING backoff (v1.0.3) — same exponential cooldown when Create
+    // Stuck-CRUISING backoff () — same exponential cooldown when Create
     // repeatedly fails to re-path after navigation cancel.
     private int stuckCruisingRetries = 0;
     private BlockPos lastStuckCruisingPos = null;
@@ -221,7 +218,7 @@ public class TrainAIController {
     // Player control detection
     private boolean playerControlled;
 
-    // ── v1.0.5: Junction Ghost Pass ──
+// Junction Ghost Pass
     // When we yield at a junction because another train is closer, we add that
     // train's UUID here with an expiry tick. During the ghost period we skip it
     // in ALL obstacle scans so it can pass through without us stopping again.
@@ -231,13 +228,13 @@ public class TrainAIController {
     private static final long GHOST_PASS_TICKS = 60L; // 3 seconds
 
 
-    // ── Control-panel flags (toggled via F10 GUI) ──
+// Control-panel flags (toggled via F10 GUI)
     private boolean chatSilenced = false; // suppress in-chat state messages
     private boolean aiEnabled = true; // false = skip all AI logic, restore throttle
     private long collisionAtTick = -1; // last tick we entered buffer_critical zone
     private String trainDisplayName = ""; // read from Create's Train.name if available
 
-    // ── Player safety system (v1.0.3) ──
+// Player safety system ()
     private long playerWhistleStartTick = -1; // tick when whistle warning started
     private UUID warningPlayerUUID = null; // player currently being warned
     private boolean hasWhistleBlock = false; // cached: does this train have a whistle/horn/bell?
@@ -279,7 +276,7 @@ public class TrainAIController {
     private Object myLastLeadingNode1;
     private Object myLastLeadingNode2;
     private double myLeadingEdgePos; // TravellingPoint.position on leading edge
-    // v1.0.7: Pre-computed reverse edge (edge from myLeadingNode2 → myLeadingNode1).
+// Pre-computed reverse edge (edge from myLeadingNode2 → myLeadingNode1).
     // Stored per-controller so TrainAIManager.buildScanMaps() can populate reverseEdgeMap
     // without calling invokeGetConnectionsFrom() per-train (avoids O(n) reflection in manager).
     Object myReverseLeadingEdge;
@@ -296,11 +293,11 @@ public class TrainAIController {
     private Method getTotalLengthMethod; // Train.getTotalLength() → int
 
     // Route-aware BFS scanner: node-level next-hop map for SIDE_TRACK filtering.
-    //
+    
     // Navigation.currentPath = List<Couple<TrackNode>> (confirmed via javap, Create
     // 6.0.1-41)
     // Each Couple(nodeA, nodeB) describes one directed hop along our route.
-    //
+    
     // routeNextHop maps: nodeA → nodeB (identity-based)
     // In BFS: if routeNextHop contains the current node, ONLY take the branch to
     // routeNextHop.get(node).
@@ -333,10 +330,10 @@ public class TrainAIController {
     // free space for this train's full length. Train stops before entering to avoid
     // gridlock.
     private boolean graphJunctionNotEnoughSpace = false;
-    // v5.3: UUID of the train that triggered graphJunctionNotEnoughSpace
+// UUID of the train that triggered graphJunctionNotEnoughSpace
     // (used for yield invisibility — the train we yield to won't see us)
     private UUID graphJunctionYieldToId = null;
-    // Key of the junction this train currently has reserved (v1.0.5).
+    // Key of the junction this train currently has reserved ().
     // Released when: (a) train passes through, (b) train no longer approaching,
     // (c) train removed. -1 = no reservation.
     private long lastReservedJunctionKey = -1;
@@ -347,7 +344,7 @@ public class TrainAIController {
     // the BFS result is then authoritative (route clear → no obstacle).
     boolean graphScanRan = false;
 
-    // ── Adaptive track-size scaling (v1.0.5) ──
+// Adaptive track-size scaling ()
     // On small loops/tracks (20-30 blocks total), the standard BUFFER_CRITICAL=8
     // and detection range=50 cause gridlock — there's not enough space for trains
     // to keep those distances. localTrackCapacity = max forward distance the BFS
@@ -356,42 +353,30 @@ public class TrainAIController {
     private double localTrackCapacity = 100.0; // blocks, default = assume large
     private double bufferScale = 1.0;         // 0.3 .. 1.0
 
-    // ════════════════════════════════════════════════════════════════════
-    // v1.0.5 NEW ECOSYSTEM ARCHITECTURE — runs ALONGSIDE old code
-    // Old fields/logic above are preserved and continue to work.
-    // New components add: FLOW_FOLLOWER state, player ecosystem integration,
-    // emergency follow-brake, and VarHandle-fast reads via EcosystemRegistry.
-    // ════════════════════════════════════════════════════════════════════
 
-    /** New v1.0.5 state machine — runs in parallel with old TrainState enum. */
     private final TrainControlStateMachine fsmV2 = new TrainControlStateMachine();
-
-    /** Reusable per-tick context — zero allocations (reset each tick). */
     private final TrainControlContext ctxV2 = new TrainControlContext();
-
-    /** New BFS perception engine — replaces old graphWalkScan for flow detection. */
     private final PerceptionEngine perceptionV2 = new PerceptionEngine();
-
-    // v1.0.8 Fix #2: Persistent snapshot — survives ctxV2.reset(), lives until next scan
     private ObstacleProfile cachedObstacleProfile;
 
     /**
      * True when the new FSM is in FLOW_FOLLOWER state.
      * Used to prevent old YIELDING escalation from firing while following a leader.
      */
-    private boolean v2InFlowFollower = false;
+    private boolean InFlowFollower = false;
 
     /**
      * Cached speed target from FLOW_FOLLOWER — applied to override old convoy code.
      * 0 = FLOW_FOLLOWER not active this tick.
      */
-    private double v2FlowTargetSpeed = 0;
+    private double FlowTargetSpeed = 0;
 
     /** Last tick the new ecosystem scan ran (staggered every 3 ticks). */
-    private long v2LastEcoScanTick = -1;
+    private long LastEcoScanTick = -1;
 
     public TrainAIController(UUID trainId) {
         this.trainId = trainId;
+        this.shortId = trainId.toString().substring(0, 8);
         this.currentState = TrainState.CRUISING;
         this.previousState = TrainState.CRUISING;
         this.stateEnteredTick = 0;
@@ -399,7 +384,7 @@ public class TrainAIController {
         this.isEmergency = false;
         this.onOppositeTrack = false;
         this.reflectionInitialized = false;
-        // v1.0.5: new FSM starts in CRUISING automatically (default constructor)
+// new FSM starts in CRUISING automatically (default constructor)
     }
 
     public void bindCreateTrain(Object createTrain) {
@@ -448,7 +433,7 @@ public class TrainAIController {
             reflectionInitialized = true;
         } catch (Exception e) {
             CreateRailwayMod.LOGGER.error("[AI] Reflection init failed for train {}",
-                    trainId.toString().substring(0, 8), e);
+                    shortId, e);
         }
     }
 
@@ -464,7 +449,7 @@ public class TrainAIController {
             isTurnMethod.setAccessible(true);
         } catch (NoSuchMethodException e) {
             CreateRailwayMod.LOGGER.error("[AI] TrackEdge.isTurn() lookup failed for train {}",
-                    trainId.toString().substring(0, 8), e);
+                    shortId, e);
         }
     }
 
@@ -479,12 +464,12 @@ public class TrainAIController {
         // Step 1: Read all train data from Create Mod
         updateTrainData(level);
 
-        // ── v1.0.5: Ecosystem tick (FLOW_FOLLOWER + player emergency brake) ──
+// Ecosystem tick (FLOW_FOLLOWER + player emergency brake)
         // Runs before all state-machine guards so FLOW_FOLLOWER speed is available.
-        // Results stored in v2InFlowFollower / v2FlowTargetSpeed for use below.
+        // Results stored in InFlowFollower / FlowTargetSpeed for use below.
         tickEcosystemV2(level, currentTick);
 
-        // ── v5: Create API guards — don't fight Create's own systems ──
+// Create API guards — don't fight Create's own systems
 
         // Guard 1: If Create is waiting for a RED SIGNAL, don't interfere.
         // Create's Navigation already handles braking to signal distance.
@@ -520,16 +505,16 @@ public class TrainAIController {
                 if (currentSpeed > safeSpeed) {
                     applySpeedControl(safeSpeed);
                     CreateRailwayMod.aiDebug("[AI] Train {} HIGH STRESS {}, slowing to {}b/t",
-                            trainId.toString().substring(0, 8),
+                            shortId,
                             String.format("%.1f", maxStress),
                             String.format("%.2f", safeSpeed));
                 }
             }
         }
 
-        // ── PER-TICK STOP ENFORCEMENT ──
+// PER-TICK STOP ENFORCEMENT
         // Create's physics overrides speed/throttle every tick.
-        // WAIT_FOR_CLEARANCE and TRAFFIC_JAM: train must be completely motionless —
+        // WAIT_FOR_CLEARANCE and TRAFFIC_JAM: train must be completely motionless
         // re-apply forceStop every tick.
         // YIELDING is intentionally NOT in this list: kinematic braking in
         // handleObstacleDetected() controls the speed smoothly. Adding forceStop here
@@ -541,7 +526,7 @@ public class TrainAIController {
             forceStop();
             // Don't return — still need to re-evaluate if obstacle is gone
 
-            // ── WFC / JAM auto-timeout (400 ticks = 20 seconds) ──
+// WFC / JAM auto-timeout (400 ticks = 20 seconds)
             // If stuck this long with no resolution, force-release.
             // Covers edge cases where obstacle disappeared but scanner missed it.
             // Reduced from 600t to 400t for better traffic flow.
@@ -587,7 +572,7 @@ public class TrainAIController {
                 }
                 transitionTo(TrainState.CRUISING, currentTick, playerControlled ? "player_control" : "ai_disabled");
             }
-            // ── FIX v1.0.5: Player trains MUST stamp VBS so other AI trains detect them! ──
+// FIX : Player trains MUST stamp VBS so other AI trains detect them!
             // Without proactiveReserve(), the player's train is invisible to graphWalkScan
             // and VBS segment checks → AI trains pass right through player-controlled trains.
             proactiveReserve(currentTick);
@@ -598,7 +583,7 @@ public class TrainAIController {
         // Stamp VBS footprint so other trains can see us in segment-conflict checks
         proactiveReserve(currentTick);
 
-        // Step 2b: Player safety system — detect players on tracks ahead (v1.0.3)
+        // Step 2b: Player safety system — detect players on tracks ahead ()
         // Takes absolute priority over train-train collision logic.
         if (RailwayConfig.safeModeEnabled) {
             ServerPlayer playerOnTrack = scanForPlayerOnTrack(level);
@@ -619,17 +604,28 @@ public class TrainAIController {
         // Initialize graph-walk reflection for obstacle scanning
         initGraphWalkReflection();
 
-        // v5.3: Auto-expire junction yield invisibility (4 seconds max)
-        if (junctionYieldingToId != null && junctionYieldingSince >= 0
-                && (currentTick - junctionYieldingSince) > 80) {
-            CreateRailwayMod.aiDebug("[AI] Train {} yield-invis expired for {}",
-                    trainId.toString().substring(0, 8),
-                    junctionYieldingToId.toString().substring(0, 8));
-            junctionYieldingToId = null;
-            junctionYieldingSince = -1;
+// Auto-expire junction yield invisibility (15s max, or when the other train has moved away)
+        if (junctionYieldingToId != null && junctionYieldingSince >= 0) {
+            boolean shouldExpire = (currentTick - junctionYieldingSince) > 300;
+            if (!shouldExpire) {
+                TrainAIManager yMgr = TrainAIManager.getInstance();
+                if (yMgr != null) {
+                    TrainAIController yWinner = yMgr.getController(junctionYieldingToId);
+                    if (yWinner == null || rawDistanceBetween(this, yWinner) > 30.0) {
+                        shouldExpire = true;
+                    }
+                }
+            }
+            if (shouldExpire) {
+                CreateRailwayMod.aiDebug("[AI] Train {} yield-invis expired for {}",
+                        shortId,
+                        junctionYieldingToId.toString().substring(0, 8));
+                junctionYieldingToId = null;
+                junctionYieldingSince = -1;
+            }
         }
 
-        // \u2500\u2500 Ghost-pass cleanup: remove expired entries each tick \u2500\u2500
+        // Ghost-pass cleanup: remove expired entries each tick
         if (!junctionGhostPassMap.isEmpty()) {
             final long nowTick = currentTick;
             junctionGhostPassMap.entrySet().removeIf(e -> nowTick > e.getValue());
@@ -638,7 +634,7 @@ public class TrainAIController {
         TrainAIController obstacleController = scanForObstacleController(level);
         boolean obstacleDetected = obstacleController != null;
 
-        // Ghost-pass override (CORRECT direction):
+        // Ghost-pass override (CORRECT direction)
         // We are the WINNER/passer. The yielder set junctionYieldingToId = our trainId.
         // If scan found a train yielding TO US, skip it so we can cross freely.
         if (obstacleDetected && obstacleController != null
@@ -646,18 +642,17 @@ public class TrainAIController {
                 && obstacleController.junctionYieldingToId.equals(this.trainId)) {
             CreateRailwayMod.aiDebug(
                     "[Junction] {} ghost-skip {} (they yield to us)",
-                    trainId.toString().substring(0, 8),
-                    obstacleController.trainId.toString().substring(0, 8));
+                    shortId,
+                    obstacleController.shortId);
             obstacleController = null;
             obstacleDetected = false;
         }
-        // v5.3 NOTE: Junction proximity post-scan was REMOVED here.
+        // NOTE: Junction proximity post-scan was REMOVED here.
         // It caused cross-intersection deadlocks where ALL trains would yield
         // to each other simultaneously. BFS junction checks (mutex + converge)
         // are sufficient. The mutex reservation is the single source of truth.
 
-
-        // \u2500\u2500 v5.4 + v1.0.5: ALWAYS-ON physical proximity scan \u2500\u2500
+        // Physical proximity scan: last-resort collision guard. Runs every tick.
         // Last-resort collision guard. Runs every tick.
         // ONLY overrides BFS when it finds something SIGNIFICANTLY closer (>4b).
         // graphScanRan=true + no BFS obstacle = BFS says path clear = skip far zone.
@@ -666,7 +661,7 @@ public class TrainAIController {
             if (emMgr != null) {
                 double emergencyRange = 20.0;
                 // Omni zone: tight range, catches junction cross-traffic
-                // v1.0.5 FIX: reduced 8→5 blocks to avoid catching parallel-track trains
+                // FIX: reduced 8→5 blocks to avoid catching parallel-track trains
                 double junctionOmniRange = 5.0;
                 double closestEmDist = emergencyRange + 1;
                 TrainAIController closestEmHit = null;
@@ -738,8 +733,8 @@ public class TrainAIController {
                     if (yieldsToUs) {
                         CreateRailwayMod.aiDebug(
                                 "[Junction] {} phys-skip {} (they yield to us)",
-                                trainId.toString().substring(0, 8),
-                                closestEmHit.trainId.toString().substring(0, 8));
+                                shortId,
+                                closestEmHit.shortId);
                     } else {
                         // Override BFS only if physical scan found something SIGNIFICANTLY closer.
                         // Require >4 block improvement to prevent flicker when BFS and phys agree.
@@ -751,8 +746,8 @@ public class TrainAIController {
                             graphDistanceToObstacle = closestEmDist;
                             CreateRailwayMod.aiDebug(
                                     "[AI] Train {} PHYS-DETECT {} at {}b (spd={}, player={}, omni={})",
-                                    trainId.toString().substring(0, 8),
-                                    closestEmHit.trainId.toString().substring(0, 8),
+                                    shortId,
+                                    closestEmHit.shortId,
                                     (int) closestEmDist,
                                     String.format("%.2f", closestEmHit.currentSpeed),
                                     closestEmHit.playerControlled,
@@ -764,25 +759,34 @@ public class TrainAIController {
             }
         }
 
-        // ── Emergency pre-stop: physical distance safety ──
+// Emergency pre-stop: physical distance safety
         // Uses PHYSICAL distance, not graph distance. Graph can miscalculate on curves.
         if (obstacleController != null && currentPosition != null
                 && obstacleController.currentPosition != null) {
             double quickDist = distanceBetween(this, obstacleController);
-            if (quickDist <= 4.0) {
-                // IMMEDIATE: overlap or near-overlap → hard stop
-                forceStop();
-            } else if (quickDist <= BUFFER_CRITICAL * bufferScale) {
-                // CRITICAL zone → hard stop
-                forceStop();
-            } else if (quickDist <= 12.0 && currentSpeed > 0.5) {
-                // CAUTION zone → limit to 40% max speed
-                double cautionSpeed = maxSpeed * 0.4;
-                if (currentSpeed > cautionSpeed) {
-                    applySpeedControl(cautionSpeed);
+
+            boolean obsYieldsToUs = (obstacleController.junctionYieldingToId != null
+                    && obstacleController.junctionYieldingToId.equals(this.trainId));
+            boolean isBypassed = (bypassingTrainId != null && bypassingTrainId.equals(obstacleController.trainId));
+            boolean weHoldJunc = (lastReservedJunctionKey != -1);
+            boolean safeToPassObstacle = obsYieldsToUs || isBypassed || (weHoldJunc && !graphHitIsHeadOn);
+
+            if (!safeToPassObstacle) {
+                if (quickDist <= 4.0) {
+                    // IMMEDIATE: overlap or near-overlap → hard stop
+                    forceStop();
+                } else if (quickDist <= BUFFER_CRITICAL * bufferScale) {
+                    // CRITICAL zone → hard stop
+                    forceStop();
+                } else if (quickDist <= 12.0 && currentSpeed > 0.5) {
+                    // CAUTION zone → limit to 40% max speed
+                    double cautionSpeed = maxSpeed * 0.4;
+                    if (currentSpeed > cautionSpeed) {
+                        applySpeedControl(cautionSpeed);
+                    }
                 }
             }
-            // ── Anti-overlap enforcement (v1.0.3) ──
+// Anti-overlap enforcement ()
             // distanceBetween() now returns edge-to-edge gap. Negative = trains
             // are physically overlapping! Emergency stop + reverse nudge.
             if (quickDist < 0) {
@@ -792,13 +796,13 @@ public class TrainAIController {
                             "anti_overlap_gap=" + String.format("%.1f", quickDist));
                     CreateRailwayMod.aiWarn(
                             "[AI] Train {} OVERLAP detected (gap={}b) with {} — emergency lockout",
-                            trainId.toString().substring(0, 8),
+                            shortId,
                             String.format("%.1f", quickDist),
-                            obstacleController.trainId.toString().substring(0, 8));
+                            obstacleController.shortId);
                 }
-                // ── Overlap deadlock breaker (v1.0.5) ──
+// Overlap deadlock breaker ()
                 // If we've been overlapping for > 60 ticks (3 seconds), one train
-                // MUST reverse to physically separate. Use UUID tie-break:
+                // MUST reverse to physically separate. Use UUID tie-break
                 // junior (lower hash) reverses, senior waits.
                 if (currentState == TrainState.WAIT_FOR_CLEARANCE
                         && (currentTick - stateEnteredTick) > 60
@@ -811,8 +815,8 @@ public class TrainAIController {
                     if (isJunior) {
                         CreateRailwayMod.aiWarn(
                                 "[AI] Train {} OVERLAP DEADLOCK — junior reversing to separate from {}",
-                                trainId.toString().substring(0, 8),
-                                obstacleController.trainId.toString().substring(0, 8));
+                                shortId,
+                                obstacleController.shortId);
                         reversingStartPosition = currentPosition;
                         reversingStartTick = currentTick;
                         blockedEdge = myLeadingEdge;
@@ -833,7 +837,7 @@ public class TrainAIController {
         // Topology failsafe: if another train's head node is our tail node,
         // they're directly adjacent behind us on the track. This catches the case
         // where the heading-dot filter still misses a train at an extreme curve angle.
-        //
+        
         // JUNCTION GUARD: At junctions multiple branches share the same node object.
         // A train on a DIFFERENT branch entering the junction will also have
         // myLeadingNode2 == our myLeadingNode1, causing a false "train behind" hit.
@@ -848,7 +852,7 @@ public class TrainAIController {
                         continue;
                     if (bypassingTrainId != null && other.trainId.equals(bypassingTrainId))
                         continue;
-                    // Same "yielding-to-us" exception as in scanBehindForObstacle:
+                    // Same "yielding-to-us" exception as in scanBehindForObstacle
                     // a stopped train whose blocker is us will move the instant we reverse.
                     if ((other.currentState == TrainState.YIELDING
                             || other.currentState == TrainState.WAIT_FOR_CLEARANCE
@@ -857,7 +861,7 @@ public class TrainAIController {
                         continue;
                     if (other.myLeadingNode2 != myLeadingNode1)
                         continue;
-                    // Junction convergence guard:
+                    // Junction convergence guard
                     // At a Y-merge, a branch train (Train D) has node2 = JUNCTION_NODE.
                     // Our train (B, just-past-junction) has node1 = JUNCTION_NODE.
                     // This causes a false match: D appears to be "behind" B.
@@ -900,7 +904,7 @@ public class TrainAIController {
         // it normally with graduated braking — no need for full JAM lockout.
         // This prevents false JAM when a distant train on the same route is detected
         // while a close train is behind us.
-        //
+        
         // Exception: if the obstacle ahead is already REVERSING (actively moving away),
         // don't enter JAM — it will clear in a moment. Entering JAM here would lock
         // the waiting train forever even though the path is about to open.
@@ -917,33 +921,35 @@ public class TrainAIController {
         } else if (!obstacleDetected && graphJunctionNotEnoughSpace
                 && currentState != TrainState.WAIT_FOR_CLEARANCE
                 && currentState != TrainState.TRAFFIC_JAM) {
-            // ── Junction look-ahead block (v2, v5 improved) ──
-            // BFS found a real junction ahead that is physically occupied or the exit
-            // segment does not have enough free space for our full train length.
-            // v5: Use kinematic braking instead of forceStop() to approach smoothly.
-            // forceStop every tick caused crawl-stop-crawl jitter near junctions.
+// Junction look-ahead
             double juncDist = graphDistanceToObstacle > 0 ? graphDistanceToObstacle : 10;
-            if (currentSpeed < 0.05 || juncDist < 3) {
-                // Already slow enough or very close — hard stop
-                forceStop();
+
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry juncReg =
+                    com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance();
+            int myJuncPriVal = juncReg.getEffectivePriority(this.trainId).value;
+
+            if (myJuncPriVal >= 3) {
+                // Priority 3+ trains don't yield at junctions — lower trains clear the way.
+                // If someone is physically still there, obstacleDetected handles it below.
             } else {
-                // Kinematic deceleration — stop exactly at junction minus buffer
-                double stopDist = Math.max(2.0, juncDist - 3.0);
-                double decel = getDecelRate();
-                double vTarget = Math.sqrt(Math.max(0, 2.0 * decel * stopDist));
-                vTarget = Math.min(vTarget, maxSpeed * 0.5); // cap at 50% max for safety
-                if (vTarget < currentSpeed) {
-                    applySpeedControl(vTarget);
+                // Normal priority — kinematic stop before the junction, then yield
+                if (currentSpeed < 0.05 || juncDist < 3) {
+                    forceStop();
+                } else {
+                    double stopDist = Math.max(2.0, juncDist - 3.0);
+                    double decel = getDecelRate();
+                    double vTarget = Math.sqrt(Math.max(0, 2.0 * decel * stopDist));
+                    vTarget = Math.min(vTarget, maxSpeed * 0.5);
+                    if (vTarget < currentSpeed) applySpeedControl(vTarget);
                 }
+                junctionEntryBlocked = true;
+                if (junctionEntryBlockedSince < 0) junctionEntryBlockedSince = currentTick;
+                if (graphJunctionYieldToId != null) {
+                    junctionYieldingToId = graphJunctionYieldToId;
+                    if (junctionYieldingSince < 0) junctionYieldingSince = currentTick;
+                }
+                transitionTo(TrainState.YIELDING, currentTick, "junction_entry_blocked");
             }
-            junctionEntryBlocked = true;
-            if (junctionEntryBlockedSince < 0) junctionEntryBlockedSince = currentTick;
-            // v5.3: Make us invisible to the train we're yielding to
-            if (graphJunctionYieldToId != null) {
-                junctionYieldingToId = graphJunctionYieldToId;
-                if (junctionYieldingSince < 0) junctionYieldingSince = currentTick;
-            }
-            transitionTo(TrainState.YIELDING, currentTick, "junction_entry_blocked");
         } else if (sandwiched) {
             // TRAFFIC JAM — train in front AND behind, just wait
             forceStop();
@@ -951,54 +957,88 @@ public class TrainAIController {
                     "jam_front_and_behind");
         } else if (obstacleDetected) {
             double dist = distanceBetween(this, obstacleController);
-            // v5.4: Use the SMALLER of physical and graph distance (most conservative).
+// Use the SMALLER of physical and graph distance (most conservative).
             // Old code overwrote physical with graph — graph can be WRONG on curves,
             // causing trains to think obstacle is far when it's actually close → collision.
             if (graphScanActive && graphDistanceToObstacle > 0) {
                 dist = Math.min(dist, graphDistanceToObstacle);
             }
 
-            // ── Priority / Pass-Signal check ──
-            // Check the global priority registry before running the normal distance-based
-            // braking logic. Priority tokens are granted to trains that have been starved
-            // (yielded >= STARVATION_THRESHOLD times in a row without moving).
+// Priority check: numeric level first, starvation tokens as tiebreaker
             TrainAIManager prChkMgr = TrainAIManager.getInstance();
-            boolean obstacleHasPriority = prChkMgr != null
-                    && prChkMgr.hasPriority(obstacleController.trainId, currentTick);
-            boolean weHavePriority = prChkMgr != null
-                    && prChkMgr.hasPriority(this.trainId, currentTick);
 
-            if (weHavePriority && !obstacleHasPriority) {
-                // WE are the priority train — treat the obstacle as if it is a departing
-                // train (moving away). Apply only gentle braking instead of full stop.
-                // The other train's AI will see our token and yield to us.
-                graphHitIsDeparting = true;
-                handleObstacleDetected(dist, obstacleController, currentTick);
-            } else if (obstacleHasPriority && !weHavePriority) {
-                // OBSTACLE has priority — yield immediately without waiting for normal
-                // braking thresholds. This is the "pass signal" received from a starved
-                // train: step aside and let it through.
-                if (currentState != TrainState.YIELDING
-                        && currentState != TrainState.WAIT_FOR_CLEARANCE) {
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry numReg =
+                    com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance();
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel myPri =
+                    numReg.getEffectivePriority(this.trainId);
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel obsPri =
+                    numReg.getEffectivePriority(obstacleController.trainId);
+
+            boolean weWin  = myPri.dominates(obsPri);
+            boolean obsWin = obsPri.dominates(myPri);
+            boolean equal  = myPri.equalPriorityTo(obsPri);
+            int delta = myPri.value - obsPri.value;
+
+            // Starvation tokens only apply between equal-priority trains
+            boolean obsHasToken = prChkMgr != null && equal && prChkMgr.hasPriority(obstacleController.trainId, currentTick);
+            boolean weHaveToken = prChkMgr != null && equal && prChkMgr.hasPriority(this.trainId, currentTick);
+
+            // On a straight single track, priority doesn't help — can't pass through the train ahead.
+            // Priority only matters at junctions/crossings where one train must clear the way.
+            // We also treat it as a junction if we hold a reservation (we got right-of-way,
+            // any obstacle we detect here should be yielding to us, not the other way around).
+            boolean atJunction = graphJunctionNotEnoughSpace || graphHitIsHeadOn
+                    || lastReservedJunctionKey != -1;
+            boolean tailgating = !atJunction && obstacleController.direction == this.direction && !graphHitIsDeparting;
+
+            boolean junctionWeHold = (lastReservedJunctionKey != -1);
+            boolean obsYieldsToUs = (obstacleController.junctionYieldingToId != null
+                    && obstacleController.junctionYieldingToId.equals(this.trainId));
+            boolean weYieldToObs = (this.junctionYieldingToId != null
+                    && this.junctionYieldingToId.equals(obstacleController.trainId));
+            boolean junctionWeWin = junctionWeHold || obsYieldsToUs;
+            boolean junctionObsWin = weYieldToObs || (graphJunctionNotEnoughSpace && !junctionWeHold);
+
+            boolean effectiveWin = weWin || (equal && (weHaveToken && !obsHasToken || (atJunction && junctionWeWin && !junctionObsWin)));
+            boolean effectiveLoss = obsWin || (equal && (obsHasToken && !weHaveToken || (atJunction && junctionObsWin && !junctionWeWin)));
+
+            if (effectiveWin) {
+                if (tailgating) {
+                    // Same track, same direction — follow normally regardless of priority
+                    handleObstacleDetected(dist, obstacleController, currentTick);
+                } else {
+                    // We have right-of-way at this junction/crossing.
+                    numReg.resetAging(this.trainId);
+                    if (graphHitIsHeadOn && dist < BUFFER_CLEARANCE * bufferScale) {
+                        // Head-on on the same single track: safety brake
+                        graphHitIsDeparting = true;
+                        handleObstacleDetected(dist, obstacleController, currentTick);
+                    }
+                    // Otherwise pass through — the lower/yielding train clears the way
+                }
+            } else if (effectiveLoss) {
+                numReg.incrementAging(this.trainId);
+                if (tailgating) {
+                    // Higher-priority train ahead on same track — follow it normally
+                    handleObstacleDetected(dist, obstacleController, currentTick);
+                } else if (currentState != TrainState.YIELDING && currentState != TrainState.WAIT_FOR_CLEARANCE) {
                     smoothStop();
-                    transitionTo(TrainState.YIELDING, currentTick,
-                            "yield_to_priority_" + obstacleController.trainId.toString().substring(0, 8));
-                    // ── Yield Invisibility ──
-                    // Tell the priority train to ignore US for 5 s (100 ticks) so it
-                    // doesn't brake for a train that deliberately moved aside for it.
-                    TrainAIController priorityCtrl = prChkMgr.getController(obstacleController.trainId);
-                    if (priorityCtrl != null) {
-                        priorityCtrl.setBypassIgnore(this.trainId, currentTick + 100);
-                        CreateRailwayMod.aiDebug(
-                            "[AI] Train {} granted 100t invisibility to priority train {}",
-                            trainId.toString().substring(0, 8),
-                            obstacleController.trainId.toString().substring(0, 8));
+                    transitionTo(TrainState.YIELDING, currentTick, "yield_to_" + obstacleController.shortId);
+                    this.junctionYieldingToId = obstacleController.trainId;
+                    this.junctionYieldingSince = currentTick;
+                    // Invisibility: grant the winner bypass ignore so it crosses without stopping
+                    int invisTicks = Math.min(300, 100 + Math.abs(delta) * 24);
+                    if (prChkMgr != null) {
+                        TrainAIController hiCtrl = prChkMgr.getController(obstacleController.trainId);
+                        if (hiCtrl != null) hiCtrl.setBypassIgnore(this.trainId, currentTick + invisTicks);
                     }
                 } else {
                     smoothStop();
                 }
             } else {
-                // Normal braking logic (neither or both have priority)
+                if (currentState == TrainState.YIELDING || currentState == TrainState.WAIT_FOR_CLEARANCE) {
+                    numReg.incrementAging(this.trainId);
+                }
                 if (currentState == TrainState.WAIT_FOR_CLEARANCE && dist < BUFFER_CLEARANCE * bufferScale) {
                     smoothStop();
                 } else {
@@ -1015,7 +1055,7 @@ public class TrainAIController {
             forceStop();
             long maxYield = RailwayConfig.maxYieldTicks.get();
 
-            // ── Fast priority escalation (120 ticks = 6 s) ──
+// Fast priority escalation (120 ticks = 6 s)
             // When two jammed trains share the same obstacle (converging junction, head-on
             // via different branches), only the SENIOR train (higher hashCode) tries a
             // smart reroute. The junior waits. Prevents both from spinning trySmartReroute
@@ -1044,7 +1084,7 @@ public class TrainAIController {
                 if (spaceAvailableBehind && RailwayConfig.reverseManeuverEnabled.get()) {
                     CreateRailwayMod.aiLog(
                             "[AI] Train {} JAM escalating to YIELDING (space behind clear after {}t)",
-                            trainId.toString().substring(0, 8), totalWaitTicks);
+                            shortId, totalWaitTicks);
                     totalWaitTicks = 0;
                     transitionTo(TrainState.YIELDING, currentTick, "jam_deescalate_space_behind");
                 } else if (totalWaitTicks > maxYield * 2 && RailwayConfig.reverseManeuverEnabled.get()) {
@@ -1054,7 +1094,7 @@ public class TrainAIController {
                     // a two-train converging JAM at a junction waits forever because
                     // neither train ever gets spaceAvailableBehind=true.
                     CreateRailwayMod.aiLog("[AI] Train {} JAM FORCE de-escalate ({}t > maxYield*2)",
-                            trainId.toString().substring(0, 8), totalWaitTicks);
+                            shortId, totalWaitTicks);
                     totalWaitTicks = 0;
                     transitionTo(TrainState.YIELDING, currentTick, "jam_force_deescalate");
                 } else {
@@ -1080,7 +1120,7 @@ public class TrainAIController {
             long maxYield = RailwayConfig.maxYieldTicks.get();
             boolean reverseEnabled = RailwayConfig.reverseManeuverEnabled.get();
 
-            // ── Head-on fast resolution (30 ticks = 1.5 sec) ──
+// Head-on fast resolution (30 ticks = 1.5 sec)
             // When the BFS scanner confirmed a genuine head-on encounter
             // (graphHitIsHeadOn),
             // resolve it 4× faster than the generic 120-tick path.
@@ -1107,7 +1147,7 @@ public class TrainAIController {
                         // Junior: reverse to clear the head-on
                         CreateRailwayMod.aiLog(
                                 "[AI] Train {} head-on reverse (junior vs {}, wait={}t)",
-                                trainId.toString().substring(0, 8),
+                                shortId,
                                 obstacleTrainId.toString().substring(0, 8), totalWaitTicks);
                         reversingStartPosition = currentPosition;
                         reversingStartTick = currentTick;
@@ -1125,10 +1165,10 @@ public class TrainAIController {
                 }
             }
 
-            // ── Fast deadlock resolution (120 ticks = 6 sec) ──
+// Fast deadlock resolution (120 ticks = 6 sec)
             // When two trains are mutually stuck at a curve/junction (both YIELDING or
             // WFC),
-            // use UUID hashCode as a deterministic priority:
+            // use UUID hashCode as a deterministic priority
             // Higher hashCode → "senior" → stays stopped and waits
             // Lower hashCode → "junior" → reverses to clear the junction
             // Tie-break on hashCode equality: use UUID compareTo (always distinct).
@@ -1137,7 +1177,7 @@ public class TrainAIController {
             // Also fires when obstacle is CRUISING but speed≈0 (stuck train — rear train
             // must be the one to reverse/reroute since the front train won't move on its
             // own).
-            // ── Junction entry blocked: suppress REVERSING escalation ──
+// Junction entry blocked: suppress REVERSING escalation
             // If we are stopped because of a junction (not a train-train deadlock),
             // inhibit all reverse logic. Junction congestion resolves on its own.
             // Timer fires after 10 s (200 t) of continuous blocking.
@@ -1152,7 +1192,7 @@ public class TrainAIController {
                     // fall through: handleNoObstacle will transition to CRUISING
                 } else {
                     // Still blocked: hold position, but do NOT reset the start timer
-                    // v5.3: timeout 40 ticks (2s) — matches reservation expiry
+// timeout 40 ticks (2s) — matches reservation expiry
                     boolean juncTimedOut = junctionEntryBlockedSince >= 0
                             && (currentTick - junctionEntryBlockedSince) > 40;
                     if (!juncTimedOut) {
@@ -1169,7 +1209,7 @@ public class TrainAIController {
                         junctionYieldingToId = null;
                         junctionYieldingSince = -1;
                         CreateRailwayMod.aiLog("[AI] Train {} junction entry block timed out after 40t",
-                                trainId.toString().substring(0, 8));
+                                shortId);
                     }
                 }
             }
@@ -1195,7 +1235,7 @@ public class TrainAIController {
                         // Junior — reverse to unblock the junction
                         CreateRailwayMod.aiLog(
                                 "[AI] Train {} priority-reverse (junior vs {}, wait={}t)",
-                                trainId.toString().substring(0, 8),
+                                shortId,
                                 obstacleTrainId.toString().substring(0, 8), totalWaitTicks);
                         reversingStartPosition = currentPosition;
                         reversingStartTick = currentTick;
@@ -1211,9 +1251,9 @@ public class TrainAIController {
                 }
             }
 
-            // ── Standard reverse escalation (maxYieldTicks, default 300) ──
+// Standard reverse escalation (maxYieldTicks, default 300)
             // Only reverse if this is the LAST train (nothing behind)
-            //
+            
             // Before reverse, check if we have space behind.
             // If space is available, start the reverse-escape maneuver.
             if (!dirResolved && totalWaitTicks > maxYield && reverseEnabled && spaceAvailableBehind) {
@@ -1278,7 +1318,7 @@ public class TrainAIController {
                     applySpeedControl(mergeCap);
                     CreateRailwayMod.aiDebug(
                         "[AI] Train {} curve-exit merge cap {} b/t (t+{})",
-                        trainId.toString().substring(0, 8),
+                        shortId,
                         String.format("%.2f", mergeCap), elapsed);
                 }
             } else if (elapsed >= CURVE_MERGE_TICKS) {
@@ -1295,13 +1335,12 @@ public class TrainAIController {
         return lastKnownLevel != null ? lastKnownLevel.dimension().location().toString() : "minecraft:overworld";
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // v1.0.5 — Ecosystem tick (FLOW_FOLLOWER + emergency follow-brake)
+
+// Ecosystem tick (FLOW_FOLLOWER + emergency follow-brake)
     // Runs in parallel with old state machine. Adds new behaviours only.
-    // ═══════════════════════════════════════════════════════════════
 
     /**
-     * Ecosystem tick — добавляет два новых поведения без конфликта со старым FSM:
+     * Ecosystem tick — добавляет два новых поведения без конфликта со старым FSM
      *
      *   1. FLOW_FOLLOWER: если впереди попутный поезд (AI или игрок) — едем за ним
      *      плавно вместо полного останова (старый YIELDING).
@@ -1317,23 +1356,23 @@ public class TrainAIController {
     private void tickEcosystemV2(ServerLevel level, long currentTick) {
         // Пропускаем если AI выключен или поезд в конфликтующих состояниях
         if (!aiEnabled || playerControlled) {
-            v2InFlowFollower = false;
-            v2FlowTargetSpeed = 0;
+            InFlowFollower = false;
+            FlowTargetSpeed = 0;
             return;
         }
         // Не применяем FLOW_FOLLOWER если поезд уже в активном манёвре
         if (currentState == TrainState.REVERSING
                 || currentState == TrainState.TRAFFIC_JAM) {
-            v2InFlowFollower = false;
-            v2FlowTargetSpeed = 0;
+            InFlowFollower = false;
+            FlowTargetSpeed = 0;
             return;
         }
 
-        // v1.0.8 Fix #2: Стагерированный скан — 3 фазы по hashCode (не 4!)
+        // Стагерированный скан — 3 фазы по hashCode (не 4!)
         int scanPhase = Math.floorMod(trainId.hashCode(), 3);
         boolean shouldScan = ((currentTick % 3) == scanPhase);
 
-        // ── 1. Заполнить контекст из уже прочитанных полей (0 доп. рефлексии) ──
+// 1. Заполнить контекст из уже прочитанных полей (0 доп. рефлексии)
         ctxV2.reset();
         ctxV2.currentTick       = currentTick;
         ctxV2.speed             = currentSpeed;
@@ -1352,8 +1391,12 @@ public class TrainAIController {
         ctxV2.selfHandle = eco.getAiHandle(trainId);
         if (ctxV2.selfHandle == null) return;
 
-        // ── 2. PerceptionEngine скан — кэширование профиля ──
-        // v1.0.8 Fix #2: На scan-тике обновляем кэш; на промежуточных — восстанавливаем.
+        // Заполнить приоритет нашего поезда (используется в AnalyzingObstacleState и YieldingState)
+        ctxV2.selfPriority = com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry
+                .getInstance().getEffectivePriority(trainId);
+
+// 2. PerceptionEngine скан — кэширование профиля
+        // На scan-тике обновляем кэш; на промежуточных — восстанавливаем.
         // Профиль живёт 3 тика без мигания ON/OFF.
         if (shouldScan) {
             try {
@@ -1365,10 +1408,10 @@ public class TrainAIController {
                         50.0 * bufferScale);
                 cachedObstacleProfile = profile;  // persist until next scan
                 ctxV2.obstacleProfile = profile;
-                v2LastEcoScanTick = currentTick;
+                LastEcoScanTick = currentTick;
             } catch (Exception e) {
                 CreateRailwayMod.LOGGER.error("[EcoV2] scan error for train {}",
-                        trainId.toString().substring(0, 8), e);
+                        shortId, e);
                 return;
             }
         } else {
@@ -1379,12 +1422,12 @@ public class TrainAIController {
         ObstacleProfile obs = ctxV2.obstacleProfile;
         if (obs == null) {
             // Нет профиля и нет кэша (первый тик) — безопасный выход
-            v2InFlowFollower = false;
-            v2FlowTargetSpeed = 0;
+            InFlowFollower = false;
+            FlowTargetSpeed = 0;
             return;
         }
 
-        // ── 3. FLOW_FOLLOWER ─────────────────────────────────────────────────
+// 3. FLOW_FOLLOWER
         // Условие: препятствие является кандидатом на following (isDeparting,
         // дистанция в нужном диапазоне, скорости сопоставимы).
         // Применяем ТОЛЬКО когда старый код был бы в CRUISING или YIELDING
@@ -1394,7 +1437,7 @@ public class TrainAIController {
                     || currentState == TrainState.ANALYZING_OBSTACLE
                     || currentState == TrainState.YIELDING)) {
 
-            v2InFlowFollower = true;
+            InFlowFollower = true;
 
             double leaderSpeed = obs.flowTargetSpeed;
             if (leaderSpeed < 0) leaderSpeed = 0;
@@ -1402,7 +1445,7 @@ public class TrainAIController {
             // Плавный lerp α=0.15 — не прыгаем резко
             double lerpSpeed = currentSpeed + (leaderSpeed - currentSpeed) * 0.15;
             lerpSpeed = Math.max(0, Math.min(maxSpeed, lerpSpeed));
-            v2FlowTargetSpeed = lerpSpeed;
+            FlowTargetSpeed = lerpSpeed;
 
             // Применяем через старый метод — совместимо с throttle/targetSpeed
             applySpeedControl(lerpSpeed);
@@ -1410,12 +1453,12 @@ public class TrainAIController {
             // Если старый код перешёл в YIELDING — отпустить его,
             // мы уже управляем скоростью через FLOW_FOLLOWER
             if (currentState == TrainState.YIELDING) {
-                forceRelease(currentTick, "v2_flow_follower");
+                forceRelease(currentTick, "_flow_follower");
             }
 
             CreateRailwayMod.aiDebug(
                     "[EcoV2] {} FLOW {} → lerp={} (leader={}, dist={}, player={})",
-                    trainId.toString().substring(0, 8),
+                    shortId,
                     String.format("%.2f", currentSpeed),
                     String.format("%.2f", lerpSpeed),
                     String.format("%.2f", leaderSpeed),
@@ -1423,11 +1466,11 @@ public class TrainAIController {
                     obs.leaderIsPlayer ? "Y" : "N");
 
         } else {
-            v2InFlowFollower = false;
-            v2FlowTargetSpeed = 0;
+            InFlowFollower = false;
+            FlowTargetSpeed = 0;
         }
 
-        // ── 4. EMERGENCY_FOLLOW_BRAKE (только когда лидер резко тормозит) ──
+// 4. EMERGENCY_FOLLOW_BRAKE (только когда лидер резко тормозит)
         // Работает независимо от FLOW_FOLLOWER — даже в обычном CRUISING,
         // если впереди поезд игрока, который внезапно тормозит.
         if (obs.hasObstacle() && (obs.isFlowCandidate || obs.isDeparting)) {
@@ -1441,7 +1484,7 @@ public class TrainAIController {
                     applySpeedControl(signedEmergencySpeed);
                     CreateRailwayMod.aiDebug(
                             "[EcoV2] {} EMERGENCY_BRAKE → {:.2f}b/t (leader decel)",
-                            trainId.toString().substring(0, 8),
+                            shortId,
                             signedEmergencySpeed);
                 }
             }
@@ -1452,7 +1495,7 @@ public class TrainAIController {
     }
 
 
-    // ─── Data reading from Create Mod ───
+// Data reading from Create Mod
 
     private void updateTrainData(ServerLevel level) {
         if (createTrainRef == null || !reflectionInitialized)
@@ -1474,7 +1517,7 @@ public class TrainAIController {
                 this.direction = rawSpeed >= 0;
             }
 
-            // ── v5: MaxSpeed watermark ──
+// MaxSpeed watermark
             // Create's targetSpeed goes to 0 when stopping (Navigation.java:278).
             // Using it as maxSpeed breaks ALL braking distance calculations.
             // Instead: track the highest speed ever observed (watermark).
@@ -1493,10 +1536,14 @@ public class TrainAIController {
                 this.derailed = derailedField.getBoolean(createTrainRef);
             }
 
-            // A paused runtime or manualTick can be stale. Manual control exists only
-            // while a real live player is seated in this train's carriage entity.
+            boolean wasPlayerControlled = this.playerControlled;
             this.playerControlled = detectPlayerRiding(level);
-            if (!this.playerControlled) {
+            if (this.playerControlled) {
+                com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance()
+                        .setPlayerControlled(this.trainId);
+            } else if (wasPlayerControlled) {
+                com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance()
+                        .clearPlayerControlled(this.trainId);
                 wakeCreateNavigation();
             }
 
@@ -1509,7 +1556,7 @@ public class TrainAIController {
                         this.distToDestination = distField.getDouble(nav);
                     }
 
-                    // ── v5 Fix #2: Read Create's signal state ──
+// Read Create's signal state
                     // Navigation.waitingForSignal (Pair<UUID, Boolean>) — non-null = red signal ahead
                     // Navigation.distanceToSignal — how far to the signal
                     // If Create is waiting for a signal, our AI should NOT override its stop.
@@ -1529,7 +1576,7 @@ public class TrainAIController {
                 }
             }
 
-            // ── v5 Fix #3: Read Create's actual acceleration rate ──
+// Read Create's actual acceleration rate
             if (accelerationMethod != null) {
                 try {
                     Object result = accelerationMethod.invoke(createTrainRef);
@@ -1539,7 +1586,7 @@ public class TrainAIController {
                 } catch (Exception ignored) {}
             }
 
-            // ── v5 Fix #5: Read TravellingPoint.blocked ──
+// Read TravellingPoint.blocked
             // blocked = true means the train hit end of track.
             // Create zeros speed and cancels nav. AI should not fight this.
             createBlocked = false;
@@ -1566,7 +1613,7 @@ public class TrainAIController {
                 } catch (Exception ignored) {}
             }
 
-            // ── v5 Fix #6: Read stress array ──
+// Read stress array
             // If max(stress) > 2.0, train is under strain → reduce speed to prevent derail.
             if (stressField != null) {
                 try {
@@ -1599,7 +1646,7 @@ public class TrainAIController {
                 List<?> carriages = (List<?>) carriagesField.get(createTrainRef);
                 this.carriageCount = carriages != null ? carriages.size() : 1;
 
-                // ── Precise train length via getTotalLength() (v1.0.3) ──
+// Precise train length via getTotalLength() ()
                 // Create's Train.getTotalLength() accounts for bogeySpacing,
                 // carriageSpacing, and wheelPointSpacing — much more accurate
                 // than our old carriageCount*6 estimate.
@@ -1635,12 +1682,12 @@ public class TrainAIController {
                         this.currentPosition = pos;
                     } else {
                         CreateRailwayMod.aiWarn("[AI] Train {} position is NULL — all extraction methods failed",
-                                trainId.toString().substring(0, 8));
+                                shortId);
                     }
                 }
             } else {
                 CreateRailwayMod.aiWarn("[AI] Train {} has no carriagesField — reflection incomplete",
-                        trainId.toString().substring(0, 8));
+                        shortId);
             }
 
             // Update heading vector from movement
@@ -1649,7 +1696,7 @@ public class TrainAIController {
             // Read TrackGraph data for same-track detection
             readTrackGraphData();
 
-            // ── Register in train registries (v1.0.5) ──
+// Register in train registries ()
             // Both registries auto-filter: StoppedTrainRegistry keeps stopped/crashed,
             // MovingTrainRegistry keeps moving. Together they cover ALL trains.
             long gameTick = lastKnownLevel != null ? lastKnownLevel.getGameTime() : 0;
@@ -1662,7 +1709,7 @@ public class TrainAIController {
 
         } catch (Exception e) {
             CreateRailwayMod.LOGGER.error("[AI] Data read error for train {}",
-                    trainId.toString().substring(0, 8), e);
+                    shortId, e);
         }
     }
 
@@ -1696,13 +1743,13 @@ public class TrainAIController {
             }
         }
 
-        // ── Curve tangent correction (v1.0.2) ──
+// Curve tangent correction ()
         // On curved edges, position-delta heading gives a CHORD direction that diverges
         // from the actual track tangent. This causes the beam scanner to "cut across"
         // the inside of the curve and falsely detect trains on adjacent parallel tracks,
         // or miss trains on the same track that have rounded the bend.
-        //
-        // v1.0.2 FIX: apply correction ALWAYS when on a curve, not just when moving.
+        
+        // FIX: apply correction ALWAYS when on a curve, not just when moving.
         // This ensures stopped trains on curves still have correct heading for
         // obstacle detection. Previously, a stopped train on a curve kept its last
         // movement heading which could be a stale chord direction.
@@ -1728,7 +1775,7 @@ public class TrainAIController {
                         double trackHX = toDx / toLen;
                         double trackHZ = toDz / toLen;
                         if (movedThisTick) {
-                            // v5: Moving on curve: 95% track geometry, 5% movement delta.
+// Moving on curve: 95% track geometry, 5% movement delta.
                             // Create's TravellingPoint has known inaccuracy on Bezier curves
                             // (source: TravellingPoint.java:213 FIXME comment). Movement delta
                             // is noisy — trust edge geometry almost entirely.
@@ -1763,7 +1810,7 @@ public class TrainAIController {
     }
 
     /**
-     * v5: Update train registries without running full AI logic.
+     * : Update train registries without running full AI logic.
      * Called from early-exit guards so other trains can still detect us.
      */
     private void updateRegistries(long currentTick) {
@@ -1777,7 +1824,7 @@ public class TrainAIController {
     }
 
     /**
-     * Read track-graph data from Create's Train object:
+     * Read track-graph data from Create's Train object
      * - Train.graph (TrackGraph) — for graph identity comparison
      * - Train.occupiedSignalBlocks (Map<UUID, UUID>) — signal block group IDs
      * - TravellingPoint.edge from leading/trailing points — for direct edge
@@ -1837,7 +1884,7 @@ public class TrainAIController {
                 myLeadingNode2 = myLastLeadingNode2;
             }
 
-            // v1.0.7: Pre-compute reverse edge for global scan maps.
+// Pre-compute reverse edge for global scan maps.
             // The reverse of our forward edge (node1→node2) is the edge (node2→node1).
             // Used by TrainAIManager.buildScanMaps() to populate reverseEdgeMap in O(1).
             myReverseLeadingEdge = null;
@@ -1859,7 +1906,7 @@ public class TrainAIController {
     }
 
     /**
-     * Dynamically set currentBeamTolerance based on TrackEdge.isTurn():
+     * Dynamically set currentBeamTolerance based on TrackEdge.isTurn()
      * - Straight track → 1.1 blocks (tight, only our rail center)
      * - Curved track → 2.5 blocks (wider, parallel tracks can converge on bends)
      */
@@ -1877,7 +1924,7 @@ public class TrainAIController {
         try {
             boolean isCurve = Boolean.TRUE.equals(isTurnMethod.invoke(myLeadingEdge));
             currentBeamTolerance = isCurve ? BEAM_LATERAL_TOLERANCE_CURVE : BEAM_LATERAL_TOLERANCE;
-            // ── Curve-exit lane merge detection ──
+// Curve-exit lane merge detection
             // When we leave a curved edge and reach a straight one, flag it so
             // tick() can apply a brief speed cap, giving main-line trains time to see us.
             if (wasOnCurvedEdge && !isCurve && curveExitTick < 0) {
@@ -1914,6 +1961,8 @@ public class TrainAIController {
      * Get the XZ world-position of a Create TrackNode.
      * TrackNode.getLocation() returns a TrackNodeLocation which extends BlockPos
      * (extends Vec3i).
+     * : Returns reusable nodeCoordBuf [X, Z] — NO allocation.
+     * Caller must use the values before the next getNodeXZ/getNodeXYZ call.
      * Returns null on any reflection failure.
      */
     private double[] getNodeXZ(Object node) {
@@ -1925,15 +1974,20 @@ public class TrainAIController {
             if (nodeGetLocationMethod == null)
                 return null;
             Object loc = nodeGetLocationMethod.invoke(node);
-            if (loc instanceof net.minecraft.core.Vec3i v)
-                return new double[] { v.getX(), v.getZ() };
+            if (loc instanceof net.minecraft.core.Vec3i v) {
+                nodeCoordBuf[0] = v.getX();
+                nodeCoordBuf[1] = v.getZ();
+                return nodeCoordBuf;
+            }
         } catch (Exception ignored) {
         }
         return null;
     }
 
     /**
-     * v1.0.8 Fix #7: Get node location as {X, Y, Z} for 3D junction keys.
+     * Get node location as {X, Y, Z} for 3D junction keys.
+     * : Returns reusable nodeCoordBuf — NO allocation.
+     * Caller must use the values before the next getNodeXZ/getNodeXYZ call.
      * Returns null on any reflection failure.
      */
     private double[] getNodeXYZ(Object node) {
@@ -1945,15 +1999,19 @@ public class TrainAIController {
             if (nodeGetLocationMethod == null)
                 return null;
             Object loc = nodeGetLocationMethod.invoke(node);
-            if (loc instanceof net.minecraft.core.Vec3i v)
-                return new double[] { v.getX(), v.getY(), v.getZ() };
+            if (loc instanceof net.minecraft.core.Vec3i v) {
+                nodeCoordBuf[0] = v.getX();
+                nodeCoordBuf[1] = v.getY();
+                nodeCoordBuf[2] = v.getZ();
+                return nodeCoordBuf;
+            }
         } catch (Exception ignored) {
         }
         return null;
     }
 
     /**
-     * Extract full TravellingPoint data from the leading carriage:
+     * Extract full TravellingPoint data from the leading carriage
      * edge, node1, node2, position. Used for graph-walk scanner.
      */
     private void extractLeadingPointData(Object carriage) {
@@ -1997,14 +2055,7 @@ public class TrainAIController {
         if (myLeadingNode2 != null)
             myLastLeadingNode2 = myLeadingNode2;
 
-        // ── Right-of-way: compute whether we travel against the edge's natural
-        // direction ──
-        // Use currentPosition → node2 direction (NOT node1→node2) so the angle is
-        // correct
-        // even mid-curve: on tight bends the node1→node2 chord diverges from the
-        // tangent.
-        // "currentPos → node2" always points where we're headed, stable across all arc
-        // positions.
+        // Direction check against edge
         isWrongWay = false;
         double[] n2xz = getNodeXZ(myLeadingNode2);
         if (n2xz != null && currentPosition != null) {
@@ -2020,22 +2071,8 @@ public class TrainAIController {
 
     /**
      * Extract world position from a Create Carriage object.
-     *
-     * Verified against Create Mod mc1.20.1/dev source code:
-     * Carriage.anyAvailableEntity() → CarriageContraptionEntity (Entity) →
-     * position()
-     * Carriage.entities (Map<ResourceKey, DimensionalCarriageEntity>) →
-     * dce.positionAnchor (Vec3)
-     * Carriage.bogeys (Couple) → CarriageBogey.getAnchorPosition() → Vec3
-     *
-     * Priority order:
-     * 0. anyAvailableEntity() → Entity → position() [BEST — actual entity position]
-     * 1. entities map → DimensionalCarriageEntity.positionAnchor [reliable even
-     * when entity unloaded]
-     * 2. bogeys → CarriageBogey.getAnchorPosition() [fallback via bogey anchor]
      */
     private BlockPos extractPositionFromCarriage(Object carriage, ServerLevel level) {
-        // ─── Approach 0: Carriage.anyAvailableEntity() → Entity → position() ───
         try {
             Method anyAvailableEntity = findMethod(carriage.getClass(), "anyAvailableEntity");
             if (anyAvailableEntity != null) {
@@ -2049,8 +2086,7 @@ public class TrainAIController {
             CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
 
-        // ─── Approach 1: Carriage.entities (Map) →
-        // DimensionalCarriageEntity.positionAnchor (Vec3) ───
+        // Try Carriage.entities
         try {
             Field entitiesField = findField(carriage.getClass(), "entities");
             if (entitiesField != null) {
@@ -2072,7 +2108,7 @@ public class TrainAIController {
             CreateRailwayMod.LOGGER.error("Reflection/Runtime error in TrainAIController: ", e);
         }
 
-        // ─── Approach 2: bogeys → CarriageBogey.getAnchorPosition() → Vec3 ───
+// Approach 2: bogeys → CarriageBogey.getAnchorPosition() → Vec3
         try {
             Field bogeysField = findField(carriage.getClass(), "bogeys");
             if (bogeysField != null) {
@@ -2103,12 +2139,12 @@ public class TrainAIController {
         return null;
     }
 
-    // ─── Obstacle Detection ───
+// Obstacle Detection
 
     /**
      * TrackGraph-based forward scanner.
      *
-     * Detection strategy (from Create's own collision approach):
+     * Detection strategy (from Create's own collision approach)
      * 1. PRIMARY: Compare occupiedSignalBlocks group UUIDs between trains.
      * If two trains share a signal block group, they're on the same track segment.
      * 2. SECONDARY: Compare TravellingPoint.edge (object identity) — trains on
@@ -2127,19 +2163,19 @@ public class TrainAIController {
         // Expire bypass mode by time
         if (bypassingTrainId != null && currentTick >= bypassModeUntilTick) {
             CreateRailwayMod.aiLog("[AI] Train {} bypass-ignore expired for {}",
-                    trainId.toString().substring(0, 8),
+                    shortId,
                     bypassingTrainId.toString().substring(0, 8));
             bypassingTrainId = null;
         }
 
         double range = RailwayConfig.obstacleDetectionRange.get();
 
-        // ── PRIMARY: Graph-walk scanner (topology-aware, curve-proof) ──
+// PRIMARY: Graph-walk scanner (topology-aware, curve-proof)
         // Walks forward along connected TrackEdges instead of casting a 3D beam.
         // Immune to curve geometry — follows actual rail connectivity.
         TrainAIController graphHit = graphWalkScan(range);
         if (graphHit != null) {
-            // ── Vector filter: departing train ──
+// Vector filter: departing train
             // The obstacle is ahead and moving away from us faster than we travel.
             // SAFETY: only skip braking when the gap is large enough to be truly safe.
             // If the departing train suddenly brakes on a curve, closing speed spikes and
@@ -2148,8 +2184,8 @@ public class TrainAIController {
             if (graphHitIsDeparting && graphDistanceToObstacle > BUFFER_CLEARANCE * bufferScale) {
                 CreateRailwayMod.aiDebug(
                         "[AI] Train {} sees departing train {} (dist={}) — skipping brake",
-                        trainId.toString().substring(0, 8),
-                        graphHit.trainId.toString().substring(0, 8),
+                        shortId,
+                        graphHit.shortId,
                         (int) graphDistanceToObstacle);
                 return null;
             }
@@ -2159,11 +2195,11 @@ public class TrainAIController {
             this.obstaclePosition = graphHit.currentPosition;
             this.obstacleTrainId = graphHit.trainId;
 
-            // ── Proactive detour ──
+// Proactive detour
             // BFS found an obstacle on the primary route AND a free alternate branch.
             // Cancel navigation so Create re-pathfinds through the free route.
-            //
-            // Backoff (v1.0.3): if the train doesn't move after the cancel (Create failed
+            
+            // Backoff (): if the train doesn't move after the cancel (Create failed
             // to route via the branch — e.g. it's too short or leads to a wrong
             // destination),
             // the cooldown doubles each retry: 200 → 400 → 800 ticks.
@@ -2190,8 +2226,8 @@ public class TrainAIController {
                     cancelCreateNavigation();
                     CreateRailwayMod.aiLog("[AI] Train {} proactive detour"
                             + " (blocked={}, free alt branch, dist={}b, retry={})",
-                            trainId.toString().substring(0, 8),
-                            graphHit.trainId.toString().substring(0, 8),
+                            shortId,
+                            graphHit.shortId,
                             (int) graphDistanceToObstacle, proactiveDetourRetries);
                     // Do NOT set bypassingTrainId — see original comment above.
                     return null;
@@ -2200,12 +2236,12 @@ public class TrainAIController {
                 if (proactiveDetourRetries >= 3) {
                     CreateRailwayMod.aiDebug(
                             "[AI] Train {} detour gave up after {} retries — normal braking",
-                            trainId.toString().substring(0, 8), proactiveDetourRetries);
+                            shortId, proactiveDetourRetries);
                 }
             }
         }
 
-        // ── StoppedTrainRegistry scan (v1.0.5) ──
+// StoppedTrainRegistry scan ()
         // The registry is the AUTHORITATIVE source for stopped/crashed trains.
         // Graph-walk BFS misses them (Create clears TravellingPoint data when stopped).
         // Beam scan misses them on curves (heading doesn't follow track geometry).
@@ -2252,8 +2288,8 @@ public class TrainAIController {
                         obstacleTrainId = stopped.trainId;
                         CreateRailwayMod.aiDebug(
                                 "[AI] Train {} found STOPPED {} via registry (gap={}b, derailed={})",
-                                trainId.toString().substring(0, 8),
-                                stopped.trainId.toString().substring(0, 8),
+                                shortId,
+                                stoppedCtrl.shortId,
                                 String.format("%.1f", edgeDist),
                                 stopped.derailed);
                         return stoppedCtrl;
@@ -2262,7 +2298,7 @@ public class TrainAIController {
             }
         }
 
-        // ── MovingTrainRegistry scan (v1.0.5) ──
+// MovingTrainRegistry scan ()
         // Additional safety layer for MOVING trains that BFS/beam missed on curves.
         // Uses the registry's TTC (Time-To-Collision) prediction for closing trains.
         // Only fires when graph walk didn't find anything (doesn't override BFS).
@@ -2322,19 +2358,19 @@ public class TrainAIController {
                 obstacleTrainId = moving.trainId;
                 CreateRailwayMod.aiDebug(
                         "[AI] Train {} found MOVING {} via registry (gap={}b, speed={})",
-                        trainId.toString().substring(0, 8),
-                        moving.trainId.toString().substring(0, 8),
+                        shortId,
+                        movingCtrl.shortId,
                         String.format("%.1f", edgeDist),
                         String.format("%.2f", moving.speed));
                 return movingCtrl;
             }
         }
 
-        // ── Ultra-close emergency scan (runs REGARDLESS of graphScanRan) ──
+// Ultra-close emergency scan (runs REGARDLESS of graphScanRan)
         // When a train is stopped on a curve, Create stops updating TravellingPoint
         // → myLeadingEdge = null → graphScanRan = false → normal proximity scan is
         // skipped entirely → trains can phase into each other around bends.
-        //
+        
         // This unconditional scan fires on ANY train within BUFFER_CRITICAL * 2 (12
         // blocks) that is clearly ahead of us.
         if (currentPosition != null) {
@@ -2362,7 +2398,7 @@ public class TrainAIController {
                         double dot = tox * headingX + toz * headingZ;
                         if (dot < -2.0)
                             continue; // clearly behind
-                        // ── FIX: player-controlled trains skip perpDist filter ──
+// FIX: player-controlled trains skip perpDist filter
                         // Player trains may have no graph data when they just sat down.
                         // At ultra-close range we ALWAYS treat them as an obstacle.
                         if (!ultraOther.playerControlled) {
@@ -2383,23 +2419,23 @@ public class TrainAIController {
                     obstacleTrainId = ultraOther.trainId;
                     CreateRailwayMod.aiWarn(
                             "[AI] Train {} ULTRA-CLOSE emergency stop ({} blocks) near {} (player={})",
-                            trainId.toString().substring(0, 8),
+                            shortId,
                             String.format("%.1f", physDist),
-                            ultraOther.trainId.toString().substring(0, 8),
+                            ultraOther.shortId,
                             ultraOther.playerControlled);
                     return ultraOther;
                 }
             }
         }
 
-        // ── Post-BFS proximity safety scan ──
+// Post-BFS proximity safety scan
         // graphWalkScan follows routeNextHop and edge-identity. In two scenarios it
-        // can miss a real obstacle:
+        // can miss a real obstacle
         // a) Edge-transition ticks: train slips into range before its edge data updates
         // b) Stopped trains (JAM/WFC): Create stops updating TravellingPoint when the
         // train is stationary, so myLeadingEdge becomes null → BFS never finds them.
-        //
-        // Detection ranges (both require isOnSameTrack or noData AND dot > 0.3):
+        
+        // Detection ranges (both require isOnSameTrack or noData AND dot > 0.3)
         // • Stopped obstacles (JAM/WFC/YIELDING at speed≈0): 15 blocks
         // • Moving obstacles (edge-transition): 5 blocks (BUFFER_CRITICAL)
         if (graphScanRan) {
@@ -2419,7 +2455,7 @@ public class TrainAIController {
                         continue;
                     double physDist = distanceBetween(this, other);
                     boolean otherDerailed = other.derailed;
-                    // ── FIX: player trains always count as "stopped" obstacle ──
+// FIX: player trains always count as "stopped" obstacle
                     // Even if speed > 0, player may brake instantly — treat conservatively
                     boolean otherStopped = other.playerControlled || otherDerailed
                             || ((other.currentState == TrainState.TRAFFIC_JAM
@@ -2432,7 +2468,7 @@ public class TrainAIController {
                             : (otherDerailed ? 20.0 : (otherStopped ? 15.0 * bufferScale : BUFFER_CRITICAL * bufferScale));
                     if (physDist > proximityThreshold)
                         continue;
-                    // ── FIX: player trains bypass same-track filter ──
+// FIX: player trains bypass same-track filter
                     // Player may not have graph data (just sat down), skip isOnSameTrack
                     boolean sameTrackConfirmed;
                     boolean noData;
@@ -2468,8 +2504,8 @@ public class TrainAIController {
                     obstacleTrainId = other.trainId;
                     CreateRailwayMod.aiLog(
                             "[AI] Train {} proximity hit {} (dist={}, player={}, stopped={})",
-                            trainId.toString().substring(0, 8),
-                            other.trainId.toString().substring(0, 8),
+                            shortId,
+                            other.shortId,
                             String.format("%.1f", physDist), other.playerControlled, otherStopped);
                     return other;
                 }
@@ -2479,7 +2515,7 @@ public class TrainAIController {
         }
 
 
-        // ── FALLBACK: Signal blocks + edge identity + beam ──
+// FALLBACK: Signal blocks + edge identity + beam
         // Used ONLY when graphWalkScan had no graph data (train just spawned, no
         // TravellingPoint yet).
         TrainAIManager manager = TrainAIManager.getInstance();
@@ -2512,7 +2548,7 @@ public class TrainAIController {
             if (dy > 10)
                 continue;
 
-            // ── Same-track check ──
+// Same-track check
             boolean sameTrack = isOnSameTrack(other);
 
             // If BOTH trains have TrackGraph data (signal blocks or edge), the result
@@ -2581,7 +2617,7 @@ public class TrainAIController {
      * sharing the same signal UUID does NOT guarantee they're on the same physical
      * rail.
      *
-     * Positive same-track detection uses:
+     * Positive same-track detection uses
      * a) TrackEdge identity — trains on the exact same rail segment share the edge
      * object.
      * b) Beam fallback (1.1 blocks in scanner) — catches trains on the same
@@ -2656,18 +2692,18 @@ public class TrainAIController {
             return true; // share BOTH nodes → definitely same/reverse rail
 
         if (sharedNode != null) {
-            // ── Junction guard (v1.0.2) ──
+// Junction guard ()
             // At crossroads (≥3 connections), perpendicular tracks CAN share a junction
             // node without being on the same physical rail (side-by-side parallel curves).
             // BUT at a SQUARE 4-way intersection (X crossroads), perpendicular trains
             // ARE on a collision course at the shared junction node.
-            //
-            // Distinction:
+            
+            // Distinction
             // • Parallel side-by-side: trains heading the SAME direction, share a node
             // only because the node is a curve endpoint beside them → NOT same track
             // • X-intersection: trains heading TOWARD the junction from perpendicular
             // branches → WILL collide at the junction → treat as same track
-            //
+            
             // Detection: if BOTH trains are heading TOWARD the shared node from
             // DIFFERENT edges, they are converging and will collide at the junction.
             Map<Object, Object> nodeConns = invokeGetConnectionsFrom(sharedNode);
@@ -2678,7 +2714,7 @@ public class TrainAIController {
                         && headingFromMovement && other.headingFromMovement) {
                     double hdot = headingX * other.headingX + headingZ * other.headingZ;
                     if (Math.abs(hdot) < 0.5) {
-                        // Perpendicular headings — check convergence:
+                        // Perpendicular headings — check convergence
                         // If BOTH trains are heading TOWARD the shared node
                         // from their respective positions, they will collide there.
                         double[] snXZ = getNodeXZ(sharedNode);
@@ -2733,7 +2769,7 @@ public class TrainAIController {
         return getEdgeLength(edge);
     }
 
-    // ─── Graph-Walk Scanner ───
+// Graph-Walk Scanner
 
     /**
      * Lazily initialize reflection handles for TrackEdge.getLength() and
@@ -2798,7 +2834,7 @@ public class TrainAIController {
                 if (couple == null)
                     continue;
 
-                // --- Extract nodeA (first) and nodeB (second) from Couple<TrackNode> ---
+// Extract nodeA (first) and nodeB (second) from Couple<TrackNode>
                 // Primary: Couple.getFirst() / Couple.getSecond() (public API in catnip)
                 Object nodeA = null, nodeB = null;
                 Method mFirst = findMethod(couple.getClass(), "getFirst");
@@ -2873,13 +2909,13 @@ public class TrainAIController {
      * Two-edge depth covers trains up to ~2× typical segment length (~24 blocks).
      * For
      * longer trains the check is conservative (may miss a third edge), but that is
-     * safe:
+     * safe
      * a false positive at most causes the train to wait one extra cycle.
      */
     /**
-     * Junction exit clearance check (v2).
+     * Junction exit clearance check ().
      *
-     * Returns false (= do NOT enter junction) if ANY of the following:
+     * Returns false (= do NOT enter junction) if ANY of the following
      *  1. Another train is physically INSIDE the junction node area (≤ 5 blocks).
      *  2. The exit edge is occupied by a forward or head-on train.
      *  3. The exit edge is too short AND the NEXT edge is also occupied
@@ -2896,9 +2932,9 @@ public class TrainAIController {
             IdentityHashMap<Object, EdgeOccupancy> edgeToTrain,
             IdentityHashMap<Object, TrainAIController> reverseEdgeMap) {
 
-        // ── Check 1: Physical junction occupancy ──
+// Check 1: Physical junction occupancy
         // ONLY count STOPPED trains (speed < 0.05) within 2.5 blocks of the junction node.
-        // A train passing THROUGH the junction at speed will clear in 1-2 ticks —
+        // A train passing THROUGH the junction at speed will clear in 1-2 ticks
         // blocking on it would cause all approaching trains to halt unnecessarily.
         double[] juncXZ = getNodeXZ(junctionNode);
         if (juncXZ != null) {
@@ -2920,13 +2956,13 @@ public class TrainAIController {
             }
         }
 
-        // ── Check 2: Exit edge occupancy ──
+// Check 2: Exit edge occupancy
         Object exitEdge = juncConns.get(exitNode);
         if (exitEdge == null) return true; // no edge data — assume clear
         if (edgeToTrain.containsKey(exitEdge) || reverseEdgeMap.containsKey(exitEdge))
             return false;
 
-        // ── Check 3: Second edge (if exit too short) ──
+// Check 3: Second edge (if exit too short)
         double firstLen = getEdgeLength(exitEdge);
         if (firstLen >= trainLength) return true; // exit long enough — done
 
@@ -2939,7 +2975,7 @@ public class TrainAIController {
         if (edge2 != null && (edgeToTrain.containsKey(edge2) || reverseEdgeMap.containsKey(edge2)))
             return false; // second segment occupied and exit alone too short — would straddle
 
-        // ── Check 4: Third edge (for long consists) ──
+// Check 4: Third edge (for long consists)
         double secondLen = (edge2 != null) ? getEdgeLength(edge2) : 0;
         if (firstLen + secondLen >= trainLength) return true; // two edges enough
 
@@ -2980,7 +3016,7 @@ public class TrainAIController {
      * This is immune to curve-related detection failures — it follows the actual
      * rail connectivity graph instead of casting a beam through 3D space.
      *
-     * Detection approach:
+     * Detection approach
      * 1. Check our own leading edge for another train ahead of us
      * 2. BFS walk from our forward node (node2) through connected edges
      * 3. For each edge, check if any other train occupies it (edge identity)
@@ -3015,7 +3051,7 @@ public class TrainAIController {
 
         graphScanRan = true; // BFS has valid data — its result is authoritative
 
-        // v1.0.7: Use pre-built global scan maps from TrainAIManager (O(1) lookup).
+// Use pre-built global scan maps from TrainAIManager (O(1) lookup).
         // Old code built 3 local maps here with 3 separate O(n) loops per controller.
         // Now a single O(n) loop runs once per tick in TrainAIManager.buildScanMaps().
         // Per-train filters (self, bypass, junction yielding, Y-level) are applied at
@@ -3025,12 +3061,12 @@ public class TrainAIController {
         IdentityHashMap<Object, TrainAIController> reverseEdgeMap = scanMaps.reverseEdgeMap;
         IdentityHashMap<Object, TrainAIController> junctionApproachMap = scanMaps.junctionApproachMap;
 
-        // v1.0.5.1 hotfix: do NOT early-exit when maps are empty.
+        // hotfix: do NOT early-exit when maps are empty.
         // Junction reservation checks (Check 0/1/2 in BFS) must always run so
         // a lone train doesn't get stopped by stale reservations or ghost trains.
         // The BFS will simply find no obstacles and return null at the end.
 
-        // ── Step 1: check if another train is AHEAD on our own leading edge ──
+// Step 1: check if another train is AHEAD on our own leading edge
         // (Our own leading edge is always on our route — no side-track filter needed
         // here)
         TrainAIController hit = filterBestFromOccupancy(edgeToTrain.get(myLeadingEdge));
@@ -3055,7 +3091,7 @@ public class TrainAIController {
             }
         }
 
-        // ── Step 1b: head-on train on the REVERSE of our leading edge ──
+// Step 1b: head-on train on the REVERSE of our leading edge
         // Our edge is A→B; a head-on train is on B→A. The reverse of B→A is A→B
         // (our own leading edge), which is what reverseEdgeMap maps.
         hit = filterGlobalHit(reverseEdgeMap.get(myLeadingEdge));
@@ -3079,7 +3115,7 @@ public class TrainAIController {
             }
         }
 
-        // ── Step 2: BFS walk forward from node2 through connected edges ──
+// Step 2: BFS walk forward from node2 through connected edges
         double edgeLen = getEdgeLength(myLeadingEdge);
         double remainingOnCurrent = Math.max(0, edgeLen - myLeadingEdgePos);
 
@@ -3119,7 +3155,7 @@ public class TrainAIController {
             if (dist > maxDist)
                 continue;
 
-            // ── Junction convergence check ──
+// Junction convergence check
             // If another train is approaching THIS node from a side branch (not on our
             // route), they will physically arrive at this junction and merge onto our
             // track. We must treat them as an obstacle at physical distance.
@@ -3130,7 +3166,7 @@ public class TrainAIController {
             if (juncHit != null) {
                 Map<Object, Object> juncConns = invokeGetConnectionsFrom(node);
                 boolean isRealJunction = juncConns != null && juncConns.size() >= 2;
-                // v5.3: Skip if we already hold the reservation for this junction
+// Skip if we already hold the reservation for this junction
                 double[] jcXZ = getNodeXYZ(node);
                 if (isRealJunction && jcXZ != null) {
                     long jcKey = JunctionReservationManager.packKey(jcXZ[0], jcXZ[1], jcXZ[2]);
@@ -3139,9 +3175,9 @@ public class TrainAIController {
                     }
                 }
                 if (isRealJunction) {
-                    // Cross-junction safety (v1.0.1): at a crossroads, two trains can
+                    // Cross-junction safety (): at a crossroads, two trains can
                     // enter from perpendicular branches and exit to different branches
-                    // without ever being on the same rail segment. Three-layer check:
+                    // without ever being on the same rail segment. Three-layer check
                     // 1. Route exit comparison (most reliable when both have route data)
                     // 2. Heading angle — perpendicular approach = crossing paths
                     // 3. Entry edge identity — different entry edges at 4+ junction
@@ -3192,8 +3228,8 @@ public class TrainAIController {
                         closestHitIsReverse = false; // converging — treat as same-direction obstacle
                         CreateRailwayMod.aiDebug(
                                 "[AI] Train {} junction-converge yield to {} at node (dist={}b, otherDist={}b)",
-                                trainId.toString().substring(0, 8),
-                                juncHit.trainId.toString().substring(0, 8), (int) dist, (int) otherToJunc);
+                                shortId,
+                                juncHit.shortId, (int) dist, (int) otherToJunc);
                     }
                 }
             }
@@ -3202,17 +3238,17 @@ public class TrainAIController {
             if (connections == null)
                 continue;
 
-            // ── Junction look-ahead (v3) — "First come, first served" ──
-            // Every junction node found in the BFS walk:
+// Junction look-ahead () — "First come, first served"
+            // Every junction node found in the BFS walk
             // 1. Check if our exit branch is occupied (isJunctionExitClear).
             // 2. Scan ALL trains converging on this junction from ANY branch.
-            //    The train closer to the junction has right-of-way.
-            //    The train further away (dist > otherDistToJunc + 4) yields.
+// The train closer to the junction has right-of-way.
+// The train further away (dist > otherDistToJunc + 4) yields.
             // This covers perpendicular crossings, T-junctions, curve exits.
             if (connections != null && connections.size() >= 3) {
                 double[] jXZ = getNodeXYZ(node);
 
-                // ── v5.3: Compute braking distance for dynamic ranges ──
+// Compute braking distance for dynamic ranges
                 // Capped at 18 blocks to prevent random stops far from junctions.
                 // At max speed 1.4 b/t, real braking dist = 26 blocks but we only
                 // need to START checking ~18 blocks out (enough to decelerate smoothly).
@@ -3220,7 +3256,7 @@ public class TrainAIController {
                 double juncBrakeDist = (currentSpeed * currentSpeed) / (2.0 * decelForJunc) + 3.0;
                 juncBrakeDist = Math.min(Math.max(8.0, juncBrakeDist), 18.0);
 
-                // ── Check 0 (v1.0.5, v5.2): Junction Reservation Mutex ──
+// Check 0 (, ): Junction Reservation Mutex
                 // MUST acquire reservation before entering ANY junction.
                 // Range: braking distance + 3 (enough to stop before junction)
                 boolean signalProtected = createWaitingForSignal && createDistToSignal < dist + 10;
@@ -3228,7 +3264,7 @@ public class TrainAIController {
                         && dist <= juncBrakeDist && !signalProtected) {
                     long juncKey = JunctionReservationManager.packKey(jXZ[0], jXZ[1], jXZ[2]);
                     long tick = lastKnownLevel != null ? lastKnownLevel.getGameTime() : 0;
-                    // v1.0.5: Pass our distance so closer train wins priority
+// Pass our distance so closer train wins priority
                     JunctionReservationManager.ReserveResult result =
                             JunctionReservationManager.getInstance()
                                     .tryReserve(juncKey, trainId, tick, dist);
@@ -3238,20 +3274,26 @@ public class TrainAIController {
                         if (winner != null) {
                             // We (B) lost the junction to A (winner).
                             // Set junctionYieldingToId = A so that A's scans skip US.
-                            // This is the correct direction: the PASSER (A) ignores the
-                            // YIELDER (B) — not the other way around.
                             junctionYieldingToId = winner;
                             junctionYieldingSince = tick;
+                            TrainAIManager winMgr = TrainAIManager.getInstance();
+                            if (winMgr != null) {
+                                TrainAIController winCtrl = winMgr.getController(winner);
+                                if (winCtrl != null) {
+                                    winCtrl.setBypassIgnore(this.trainId, tick + 200);
+                                }
+                            }
                             CreateRailwayMod.aiDebug(
                                     "[Junction] {} yields to {} (myDist={:.1f}b) — passer will ghost-skip us",
-                                    trainId.toString().substring(0, 8),
+                                    shortId,
                                     winner.toString().substring(0, 8), dist);
                         }
                     } else {
                         // We got the reservation — we are the PASSER.
-                        // junctionYieldingToId on yielder trains already points to us,
-                        // so our scans will automatically skip them.
                         lastReservedJunctionKey = juncKey;
+                        if (result.ghostPassTarget != null) {
+                            setBypassIgnore(result.ghostPassTarget, tick + 200);
+                        }
                     }
                 }
 
@@ -3271,12 +3313,12 @@ public class TrainAIController {
                             graphJunctionNotEnoughSpace = true;
                             CreateRailwayMod.aiDebug(
                                     "[AI] Train {} junction exit blocked (dist={}b)",
-                                    trainId.toString().substring(0, 8), (int) dist);
+                                    shortId, (int) dist);
                         }
                     }
                 }
 
-                // ── Check 2 (v5.3, hotfix v1.0.5.1): stopped train physically inside junction ──
+// Check 2 (, hotfix ): stopped train physically inside junction
                 // Only fires when we do NOT already hold the reservation for this junction.
                 // If we hold the reservation, we have right-of-way — skip this check entirely.
                 // Also: only block on STOPPED trains (speed < 0.12). Moving trains clear in 1-2 ticks
@@ -3294,7 +3336,7 @@ public class TrainAIController {
                                     && other.junctionYieldingToId.equals(this.trainId)) continue;
                             if (other.currentPosition == null) continue;
                             if (myGraph != null && other.myGraph != null && myGraph != other.myGraph) continue;
-                            // v1.0.5.1: skip trains moving at speed — they'll clear in 1-2 ticks
+// skip trains moving at speed — they'll clear in 1-2 ticks
                             if (other.currentSpeed > 0.12) continue;
                             int dyo = Math.abs(currentPosition.getY() - other.currentPosition.getY());
                             if (dyo > 6) continue;
@@ -3308,8 +3350,8 @@ public class TrainAIController {
                                 graphJunctionNotEnoughSpace = true;
                                 CreateRailwayMod.aiDebug(
                                         "[AI] Train {} junction occupied by stopped {} (d={}b, spd={})",
-                                        trainId.toString().substring(0, 8),
-                                        other.trainId.toString().substring(0, 8),
+                                        shortId,
+                                        other.shortId,
                                         (int) otherDistToJunc,
                                         String.format("%.2f", other.currentSpeed));
                                 break;
@@ -3332,7 +3374,7 @@ public class TrainAIController {
                 if (!visitedNodes.add(nextNode))
                     continue;
 
-                // ── Route-path filter (SIDE_TRACK elimination) ──
+// Route-path filter (SIDE_TRACK elimination)
                 // routeNextHop: maps each route node to its expected next node.
                 // If we’re at a known route node, ONLY follow the branch toward
                 // routeNextHop.get(node).
@@ -3342,7 +3384,7 @@ public class TrainAIController {
                 if (!routeNextHop.isEmpty()) {
                     Object expectedNext = routeNextHop.get(node);
                     if (expectedNext != null && nextNode != expectedNext) {
-                        // ── Proactive detour detection ──
+// Proactive detour detection
                         // This is an off-route branch at a known junction node.
                         // If this alternative edge has no trains on it, flag it.
                         // When our primary route is also blocked (closestHit will be set),
@@ -3350,7 +3392,7 @@ public class TrainAIController {
                         // re-pathfinds via the free alternative — no 5-second wait needed.
                         if (!edgeToTrain.containsKey(nextEdge)
                                 && !reverseEdgeMap.containsKey(nextEdge)) {
-                            // Dead-end guard (v1.0.3): only flag as a viable detour if
+                            // Dead-end guard (): only flag as a viable detour if
                             // the branch node has ≥2 connections (i.e. it leads somewhere).
                             // A single-connection node is a siding/depot dead-end; Create
                             // cannot route to a scheduled destination through it, so
@@ -3404,7 +3446,7 @@ public class TrainAIController {
             }
         }
 
-        // ── Adaptive track-size scaling (v1.0.5) ──
+// Adaptive track-size scaling ()
         // maxReachDist = deepest forward distance BFS could walk = available track ahead.
         // Compute bufferScale: clamp(capacity / 100, 0.3, 1.0)
         // Small loop (20b) → scale 0.3 → effective BUFFER_CRITICAL = 2.4, range = 15
@@ -3413,7 +3455,7 @@ public class TrainAIController {
         localTrackCapacity = maxReachDist;
         bufferScale = Math.max(0.3, Math.min(1.0, localTrackCapacity / 100.0));
 
-        // ── Junction reservation release (v1.0.5) ──
+// Junction reservation release ()
         // If the old reservation key was NOT re-acquired in this BFS walk,
         // the train has passed through the junction → release it.
         if (previousJuncKey != -1 && previousJuncKey != lastReservedJunctionKey) {
@@ -3424,7 +3466,7 @@ public class TrainAIController {
             graphDistanceToObstacle = closestDist;
             graphScanActive = true;
 
-            // ── Dead-end / Parking Zone detection ──
+// Dead-end / Parking Zone detection
             // If the exit node of the hit edge has no further rail connections (or only
             // the back-edge we came from), the train is sitting at a depot / station
             // siding.
@@ -3434,7 +3476,7 @@ public class TrainAIController {
                 graphHitIsParkingZone = (beyond == null || beyond.isEmpty() || beyond.size() <= 1);
             }
 
-            // ── Departing train detection ──
+// Departing train detection
             // If the obstacle is moving in the same direction as us AND faster, the gap is
             // increasing. No braking is needed while the train is pulling away from us.
             // NEVER apply this to head-on (oncoming) trains: both trains have
@@ -3451,7 +3493,7 @@ public class TrainAIController {
     /**
      * Avoidance marker check — called after reverse completes.
      *
-     * Returns true if:
+     * Returns true if
      * a) The avoidance marker is still active (hasn't expired), AND
      * b) The train that was blocking us is still in front on the same edge.
      *
@@ -3498,10 +3540,10 @@ public class TrainAIController {
         return false;
     }
 
-    // ─── Decision Handling ───
+// Decision Handling
 
     /**
-     * Handle a train detected ahead. Uses a 4-stage graduated braking curve:
+     * Handle a train detected ahead. Uses a 4-stage graduated braking curve
      * Stage 0 (≤ BUFFER_CRITICAL = 6 blocks): WAIT_FOR_CLEARANCE — complete lockout
      * Stage 1 (≤ minimumStopDistance = 7 blocks): hard stop — never go closer
      * Stage 2 (≤ 30% of range = 15 blocks): full stop and yield
@@ -3519,7 +3561,7 @@ public class TrainAIController {
     /**
      * Handle a train detected ahead — kinematic adaptive braking.
      *
-     * Braking stages (v² = v₀² + 2·a·d):
+     * Braking stages (v² = v₀² + 2·a·d)
      * CRITICAL (≤ BUFFER_CRITICAL = 6 b) : WAIT_FOR_CLEARANCE + hard stop
      * HARD STOP (≤ minStop = 7 b) : YIELDING + force stop
      * CONVOY (gap ≥ CONVOY_MIN_GAP, same dir): FOLLOWING — match obstacle speed
@@ -3533,7 +3575,7 @@ public class TrainAIController {
         double minStop = RailwayConfig.minimumStopDistance.get();
         double range = RailwayConfig.obstacleDetectionRange.get();
 
-        // ── Adaptive track-size scaling (v1.0.5) ──
+// Adaptive track-size scaling ()
         // On small tracks, reduce all buffer thresholds proportionally.
         // bufferScale = 0.3 (tiny loop) .. 1.0 (big network)
         double scaledCritical = BUFFER_CRITICAL * bufferScale;
@@ -3541,7 +3583,7 @@ public class TrainAIController {
         double scaledClearance = BUFFER_CLEARANCE * bufferScale;
         double scaledRange = range * bufferScale;
 
-        // ─── Stage 0: CRITICAL ───
+// Stage 0: CRITICAL
         if (distance <= scaledCritical) {
             forceStop();
             transitionTo(TrainState.WAIT_FOR_CLEARANCE, currentTick,
@@ -3550,7 +3592,7 @@ public class TrainAIController {
             return;
         }
 
-        // ─── Stage 1: HARD STOP ───
+// Stage 1: HARD STOP
         if (distance <= scaledMinStop) {
             forceStop();
             transitionTo(TrainState.YIELDING, currentTick,
@@ -3558,7 +3600,7 @@ public class TrainAIController {
             return;
         }
 
-        // ─── Predictive TTC check ───
+// Predictive TTC check
         // Closing speed = my speed - obstacle speed (positive = we are approaching)
         double obstacleSpeed = (obstacle.direction == this.direction)
                 ? obstacle.currentSpeed
@@ -3575,8 +3617,8 @@ public class TrainAIController {
             }
         }
 
-        // ─── Stage 2: CONVOY FOLLOWING ───
-        // If the obstacle is ahead, same direction, same speed, within following gap:
+// Stage 2: CONVOY FOLLOWING
+        // If the obstacle is ahead, same direction, same speed, within following gap
         // increase a counter. After CONVOY_CONFIRM_TICKS enter following mode.
         boolean sameDir = obstacle.direction == this.direction;
         boolean fastEnough = obstacle.currentSpeed > maxSpeed * 0.15; // not nearly stopped
@@ -3599,7 +3641,7 @@ public class TrainAIController {
             }
         }
 
-        // ─── Stage 3: Kinematic braking curve ───
+// Stage 3: Kinematic braking curve
         // Required braking distance to reach obstacle's speed from our speed.
         // d_needed = (v_us² - v_obs²) / (2 * DECEL_RATE)
         double vUs = this.currentSpeed;
@@ -3628,7 +3670,7 @@ public class TrainAIController {
             return;
         }
 
-        // ─── Stage 4: Far approaching — proportional slow-down ───
+// Stage 4: Far approaching — proportional slow-down
         // Scale to 60% speed at 75% of range, 30% at 50% of range.
         double factor = Math.max(0.3, Math.min(1.0, (distance - brakeTrigger) / (scaledRange - brakeTrigger)));
         double targetSpd = maxSpeed * factor;
@@ -3665,8 +3707,9 @@ public class TrainAIController {
             // Guard 3 — rolling distance history check.
             // We sample the physical distance to the WFC obstacle every tick and store
             // the last 3 readings. Only exit WFC when ALL 3 samples >= BUFFER_CLEARANCE.
-            // This prevents a single "scan miss" tick from falsely granting clearance.
-            if (wfcObstacleTrainId != null) {
+            // EXCEPTION: When BFS graph scanner ran and found NO obstacle along our track,
+            // an obstacle parked on an adjacent/parallel track must not block clearance!
+            if (wfcObstacleTrainId != null && (!graphScanRan || graphScanActive)) {
                 TrainAIManager mgr = TrainAIManager.getInstance();
                 if (mgr != null) {
                     TrainAIController lockedObstacle = mgr.getController(wfcObstacleTrainId);
@@ -3691,8 +3734,8 @@ public class TrainAIController {
                 }
             }
 
-            // Guard 4 — do NOT exit WFC while the locked obstacle is still YIELDING.
-            if (wfcObstacleTrainId != null) {
+            // Guard 4 — Only wait if the locked obstacle is head-on on the same single track
+            if (wfcObstacleTrainId != null && graphHitIsHeadOn) {
                 TrainAIManager mgrG4 = TrainAIManager.getInstance();
                 if (mgrG4 != null) {
                     TrainAIController g4obs = mgrG4.getController(wfcObstacleTrainId);
@@ -3714,6 +3757,9 @@ public class TrainAIController {
             wakeCreateNavigation();
             transitionTo(TrainState.CRUISING, currentTick, "clearance_granted");
             totalWaitTicks = 0;
+            // Сброс aging — препятствие убралось, едем
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry
+                    .getInstance().resetAging(this.trainId);
             return;
         }
 
@@ -3736,9 +3782,12 @@ public class TrainAIController {
             wakeCreateNavigation();
             transitionTo(TrainState.CRUISING, currentTick, "path_clear_resuming");
             totalWaitTicks = 0;
+            // Сброс aging — путь открыт, поезд возобновляет движение
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry
+                    .getInstance().resetAging(this.trainId);
         }
 
-        // ── Stuck CRUISING recovery ──
+// Stuck CRUISING recovery
         // When the train has been CRUISING with speed≈0 longer than
         // STUCK_CRUISING_REROUTE_TICKS,
         // Create's navigation likely has no valid path (broken rail, invalid schedule
@@ -3763,9 +3812,13 @@ public class TrainAIController {
                 }
                 lastRerouteTick = currentTick;
                 lastStuckCruisingPos = currentPosition;
-                cancelCreateNavigation();
+                restoreThrottle();
+                wakeCreateNavigation();
+                if (stuckCruisingRetries >= 2) {
+                    cancelCreateNavigation();
+                }
                 CreateRailwayMod.aiLog("[AI] Train {} stuck-CRUISING nav retry #{} (dist={}b, cd={}t)",
-                        trainId.toString().substring(0, 8), stuckCruisingRetries,
+                        shortId, stuckCruisingRetries,
                         String.format("%.1f", distToDestination), stuckCooldown);
 
                 // After 2+ failed wake attempts: if space behind exists, escalate to
@@ -3776,7 +3829,7 @@ public class TrainAIController {
                         && RailwayConfig.reverseManeuverEnabled.get()) {
                     CreateRailwayMod.aiLog(
                             "[AI] Train {} stuck-CRUISING {} retries → escalating to YIELDING for reversal",
-                            trainId.toString().substring(0, 8), stuckCruisingRetries);
+                            shortId, stuckCruisingRetries);
                     forceStop();
                     stuckCruisingRetries = 0;
                     lastStuckCruisingPos = null;
@@ -3825,7 +3878,7 @@ public class TrainAIController {
     }
 
     /**
-     * v5: Get the actual deceleration rate — uses Create's acceleration() if available,
+     * : Get the actual deceleration rate — uses Create's acceleration() if available,
      * otherwise falls back to the static DECEL_RATE constant.
      * This ensures braking distances match Create's own physics exactly.
      */
@@ -3862,10 +3915,10 @@ public class TrainAIController {
         wakeCreateNavigation();
         transitionTo(TrainState.CRUISING, currentTick, "force_release:" + reason);
         CreateRailwayMod.aiLog("[AI] Train {} force-released ({})",
-                trainId.toString().substring(0, 8), reason);
+                shortId, reason);
     }
 
-    // ─── Speed Control ───
+// Speed Control
 
     /**
      * Force the train to stop completely by setting both speed and targetSpeed to
@@ -3884,9 +3937,9 @@ public class TrainAIController {
             if (speedField != null) {
                 speedField.setDouble(createTrainRef, 0.0);
             }
-            // v5: ALSO zero targetSpeed so Create's approachTargetSpeed() doesn't
+// ALSO zero targetSpeed so Create's approachTargetSpeed() doesn't
             // re-accelerate on the next tick. This was the root cause of "rolling"
-            // into collisions. Safe because v5 uses maxSpeedWatermark for maxSpeed
+            // into collisions. Safe because uses maxSpeedWatermark for maxSpeed
             // (never reads targetSpeed as maxSpeed anymore).
             if (targetSpeedField != null) {
                 targetSpeedField.setDouble(createTrainRef, 0.0);
@@ -3965,7 +4018,7 @@ public class TrainAIController {
         }
     }
 
-    // ─── Reverse Maneuver ───
+// Reverse Maneuver
 
     /**
      * Apply reverse (negative) speed to the train via reflection.
@@ -3994,12 +4047,12 @@ public class TrainAIController {
      * Smart Junction Re-routing.
      *
      * Called every tick while the train is stuck in YIELDING or WAIT_FOR_CLEARANCE.
-     * Two-phase approach:
+     * Two-phase approach
      *
-     * Phase 1 — Deadlock detection (0 → REROUTE_WAIT_TICKS ticks):
+     * Phase 1 — Deadlock detection (0 → REROUTE_WAIT_TICKS ticks)
      * Just wait. The obstacle may move on its own.
      *
-     * Phase 2 — Reroute attempt (> REROUTE_WAIT_TICKS ticks, cooldown respected):
+     * Phase 2 — Reroute attempt (> REROUTE_WAIT_TICKS ticks, cooldown respected)
      * a) Look at forward connections from our leading node (myLeadingNode2).
      * b) Classify each edge as BLOCKED (another train is on it) or FREE.
      * c) If at least one FREE edge exists alongside a BLOCKED one → junction
@@ -4035,7 +4088,7 @@ public class TrainAIController {
                 lastRerouteTick = currentTick;
                 cancelCreateNavigation();
                 CreateRailwayMod.aiLog("[AI] Train {} no graph data, blind reroute after {}t",
-                        trainId.toString().substring(0, 8), waitedTicks);
+                        shortId, waitedTicks);
             }
             return;
         }
@@ -4088,7 +4141,7 @@ public class TrainAIController {
             cancelCreateNavigation();
             CreateRailwayMod.aiLog(
                     "[AI] Train {} smart-junction reroute: {}f/{}b fwd-edges, waited {}t",
-                    trainId.toString().substring(0, 8), freeCount, blockedCount, waitedTicks);
+                    shortId, freeCount, blockedCount, waitedTicks);
             // Transition to CRUISING so the train can actually move on the bypass route.
             // Without this, forceStop() in YIELDING/TRAFFIC_JAM stops the train every tick
             // even after Create has built a new path — the bypass is never taken.
@@ -4105,7 +4158,7 @@ public class TrainAIController {
             cancelCreateNavigation();
             CreateRailwayMod.aiLog(
                     "[AI] Train {} single-track reroute after {}t (no junction detected)",
-                    trainId.toString().substring(0, 8), waitedTicks);
+                    shortId, waitedTicks);
         }
     }
 
@@ -4117,11 +4170,11 @@ public class TrainAIController {
      * discard the current route and force Create to re-pathfind, which is slow
      * and can permanently break navigation if no path exists.
      *
-     * When to call:
+     * When to call
      * - After stopping the train (WFC/YIELDING exit → CRUISING)
      * - NOT during normal CRUISING (schedule runtime handles itself)
      *
-     * When cancelCreateNavigation() is needed for rerouting:
+     * When cancelCreateNavigation() is needed for rerouting
      * - trySmartJunctionReroute() — explicitly needs a new path via different
      * junction
      * - handleReversing() completion — route needs restart after backing up
@@ -4132,7 +4185,7 @@ public class TrainAIController {
         if (createTrainRef == null)
             return;
         try {
-            // ── Step 1: Access ScheduleRuntime ──
+// Step 1: Access ScheduleRuntime
             Field runtimeFieldLocal = findField(createTrainRef.getClass(), "runtime");
             if (runtimeFieldLocal == null)
                 return;
@@ -4151,17 +4204,17 @@ public class TrainAIController {
             if (completedField != null && (boolean) completedField.get(runtime))
                 return;
 
-            // ── Step 2: Unpause if the runtime is paused ──
+// Step 2: Unpause if the runtime is paused
             // runtime.paused=true → tick() returns immediately → navigation never runs.
             Field pausedField = findField(runtime.getClass(), "paused");
             boolean wasPaused = pausedField != null && (boolean) pausedField.get(runtime);
             if (wasPaused && pausedField != null) {
                 pausedField.set(runtime, false);
                 CreateRailwayMod.aiLog("[AI] Train {} runtime unpaused",
-                        trainId.toString().substring(0, 8));
+                        shortId);
             }
 
-            // ── Step 3: Reset cooldown if runtime is stuck in cooldown ──
+// Step 3: Reset cooldown if runtime is stuck in cooldown
             // Only reset if not currently navigating (destination == null)
             // to avoid disrupting active in-transit navigation.
             boolean hasActiveNav = false;
@@ -4219,7 +4272,7 @@ public class TrainAIController {
                         if (cancelMethod != null)
                             cancelMethod.invoke(nav);
                         CreateRailwayMod.aiLog("[AI] Train {} navigation cancelled for reroute",
-                                trainId.toString().substring(0, 8));
+                                shortId);
                     } else {
                         // Destination already null — clear stale path data
                         Field pathField = findField(nav.getClass(), "currentPath");
@@ -4240,7 +4293,7 @@ public class TrainAIController {
 
     /**
      * Clear bypass-ignore when the bypassed train is far enough away that
-     * our scanner wouldn't detect it anyway. Uses pure distance check —
+     * our scanner wouldn't detect it anyway. Uses pure distance check
      * NOT heading-based, because heading can be reversed/wrong during and
      * right after the reverse maneuver.
      */
@@ -4254,7 +4307,7 @@ public class TrainAIController {
         TrainAIController bypassed = manager.getController(bypassingTrainId);
         if (bypassed == null || bypassed.currentPosition == null) {
             CreateRailwayMod.aiLog("[AI] Train {} bypassed train disappeared, clearing bypass",
-                    trainId.toString().substring(0, 8));
+                    shortId);
             bypassingTrainId = null;
             return;
         }
@@ -4267,7 +4320,7 @@ public class TrainAIController {
         // not a braking distance check.
         if (dist > range + 15) {
             CreateRailwayMod.aiLog("[AI] Train {} far from bypassed train {} ({}b), clearing bypass",
-                    trainId.toString().substring(0, 8),
+                    shortId,
                     bypassingTrainId.toString().substring(0, 8), (int) dist);
             bypassingTrainId = null;
         }
@@ -4341,7 +4394,7 @@ public class TrainAIController {
             double dot = toOtherX * headingX + toOtherZ * headingZ;
             // dot > 0.5 means the train is clearly IN FRONT of us — skip it.
             // We accept trains at the side (dot ≈ 0) and behind (dot < 0).
-            // Old threshold -0.3 missed trains at 90° to our heading (curve stops):
+            // Old threshold -0.3 missed trains at 90° to our heading (curve stops)
             // a train directly behind us on a curve may approach from a perpendicular
             // heading, giving dot ≈ 0 which was incorrectly ignored → spaceAvailableBehind
             // = true → all queued curve trains tried to reverse simultaneously.
@@ -4364,7 +4417,7 @@ public class TrainAIController {
     /**
      * Handle the REVERSING state — the train is backing up to escape a deadlock.
      *
-     * Continues reversing until:
+     * Continues reversing until
      * a) Backed up >= reverseBackupDistance blocks → CRUISING (nav reroutes)
      * b) Another train detected in the reverse path (after initial movement) →
      * YIELDING
@@ -4378,7 +4431,7 @@ public class TrainAIController {
             backedUp = distanceBetweenPos(currentPosition, reversingStartPosition);
         }
 
-        // ── Stuck-REVERSING rescue (40 ticks ≈ 2 sec) ──
+// Stuck-REVERSING rescue (40 ticks ≈ 2 sec)
         // When a train enters REVERSING but does not physically move (myLeadingEdge
         // became
         // null because Create stopped updating TravellingPoint when the train was
@@ -4392,7 +4445,7 @@ public class TrainAIController {
         if (backedUp < 0.5 && (currentTick - reversingStartTick) > 40) {
             CreateRailwayMod.aiWarn(
                     "[AI] Train {} stuck in REVERSING (moved {}b in {} ticks) — resetting navigation",
-                    trainId.toString().substring(0, 8),
+                    shortId,
                     String.format("%.2f", backedUp),
                     currentTick - reversingStartTick);
             cancelCreateNavigation();
@@ -4403,7 +4456,7 @@ public class TrainAIController {
         }
         if (backedUp >= RailwayConfig.reverseBackupDistance.get()) {
             CreateRailwayMod.aiLog("[AI] Train {} reverse complete ({}b), handing to navigation",
-                    trainId.toString().substring(0, 8), (int) backedUp);
+                    shortId, (int) backedUp);
             // Clear bypass immediately so the forward scan sees the original obstacle on
             // the very next tick. The old code extended bypass for 300 more ticks, which
             // caused the train to charge blindly into the obstacle if it hadn't moved away.
@@ -4418,7 +4471,7 @@ public class TrainAIController {
             // This prevents the "reverse → crash → reverse → crash" loop.
             if (isBlockedEdgeStillOccupied(currentTick)) {
                 CreateRailwayMod.aiLog("[AI] Train {} blocked edge still occupied after reverse, yielding",
-                        trainId.toString().substring(0, 8));
+                        shortId);
                 forceStop();
                 totalWaitTicks = 0;
                 transitionTo(TrainState.YIELDING, currentTick, "post_reverse_blocked_edge");
@@ -4430,7 +4483,7 @@ public class TrainAIController {
             return;
         }
 
-        // ── Instant ultra-close safety scan (no heading requirement) ──
+// Instant ultra-close safety scan (no heading requirement)
         // Catches fast-approaching trains BEFORE heading flips (first 2 blocks of
         // reverse).
         // Uses BUFFER_CRITICAL range — any train this close WILL be hit if we keep
@@ -4457,8 +4510,8 @@ public class TrainAIController {
                     // We stop for that — they're in our way.
                     CreateRailwayMod.aiWarn(
                             "[AI] Train {} aborted reverse — {} within {}b (ultra-close safety)",
-                            trainId.toString().substring(0, 8),
-                            ub.trainId.toString().substring(0, 8),
+                            shortId,
+                            ub.shortId,
                             String.format("%.1f", ubDist));
                     forceStop();
                     totalWaitTicks = 0;
@@ -4468,8 +4521,8 @@ public class TrainAIController {
             }
         }
 
-        // ── Heading-based scan (runs after heading has flipped, backedUp > 2 blocks)
-        // ──
+        // Heading-based scan (runs after heading has flipped, backedUp > 2 blocks)
+
         // graphWalkScan cannot be used here: it walks from myLeadingEdge which is the
         // SCHEDULE-FORWARD edge, NOT the direction of physical movement.
         // Trains in our reverse path will have dot > 0.3 with the reversed heading.
@@ -4509,8 +4562,8 @@ public class TrainAIController {
                             continue;
                     }
                     CreateRailwayMod.aiLog("[AI] Train {} aborted reverse — {} in reverse path (heading scan)",
-                            trainId.toString().substring(0, 8),
-                            other.trainId.toString().substring(0, 8));
+                            shortId,
+                            other.shortId);
                     forceStop();
                     totalWaitTicks = 0;
                     transitionTo(TrainState.YIELDING, currentTick, "blocked_in_reverse_path");
@@ -4541,7 +4594,7 @@ public class TrainAIController {
                 dimensionId(), trainId, currentPosition, aheadPos, direction, currentTick);
     }
 
-    // ─── State Machine ───
+// State Machine
 
     private void transitionTo(TrainState newState, long currentTick, String reason) {
         if (newState == currentState)
@@ -4574,7 +4627,7 @@ public class TrainAIController {
             }
         }
 
-        // ── Priority / Pass-Signal: track starvation and grant / revoke tokens ──
+// Priority / Pass-Signal: track starvation and grant / revoke tokens
         TrainAIManager prMgr = TrainAIManager.getInstance();
         if (prMgr != null) {
             if (newState == TrainState.YIELDING && obstacleTrainId != null) {
@@ -4587,7 +4640,7 @@ public class TrainAIController {
                     prMgr.grantPriority(trainId, expiry);
                     CreateRailwayMod.aiLog(
                         "[AI] Train {} earned PRIORITY TOKEN (yielded {} times) – expires t+{}",
-                        trainId.toString().substring(0, 8), consecutiveYields, PRIORITY_DURATION_TICKS);
+                        shortId, consecutiveYields, PRIORITY_DURATION_TICKS);
                 }
             } else if (newState == TrainState.CRUISING) {
                 // Resumed normally — revoke any token and reset counter
@@ -4595,14 +4648,14 @@ public class TrainAIController {
                     prMgr.revokePriority(trainId);
                     CreateRailwayMod.aiDebug(
                         "[AI] Train {} priority token revoked (resumed CRUISING after {} yields)",
-                        trainId.toString().substring(0, 8), consecutiveYields);
+                        shortId, consecutiveYields);
                     consecutiveYields = 0;
                     yieldSessionStart = -1;
                 }
             }
         }
 
-        // ── Junction reservation & VBS release on stop/yielding states (v1.0.8 deadlock fix) ──
+// Junction reservation & VBS release on stop/yielding states (deadlock fix)
         // When stopped or waiting before entering the junction, release the lock immediately
         // so the other train on the junction or crossing can pass through.
         if (newState == TrainState.YIELDING || newState == TrainState.WAIT_FOR_CLEARANCE
@@ -4615,22 +4668,22 @@ public class TrainAIController {
         }
 
         CreateRailwayMod.aiLog("[AI] Train {} state: {} -> {} ({})",
-                trainId.toString().substring(0, 8),
+                shortId,
                 previousState, currentState, reason);
 
         // Broadcast state changes to nearby players in chat (if not silenced)
         if (!chatSilenced && currentPosition != null && lastKnownLevel != null) {
             String msg = String.format("§6[AI] §eTrain %s §f%s→%s §7(%s)",
-                    trainId.toString().substring(0, 8),
+                    shortId,
                     previousState, currentState, reason);
             broadcastToNearbyPlayers(lastKnownLevel, msg, 100);
         }
     }
 
-    // ─── Reflection helpers ───
+// Reflection helpers
 
     static Field findField(Class<?> cls, String name) {
-        // ── Static cache lookup — O(1) after first call per class+field combo ──
+// Static cache lookup — O(1) after first call per class+field combo
         String cacheKey = cls.getName();
         ConcurrentHashMap<String, Field> classCache = FIELD_CACHE.computeIfAbsent(cacheKey,
                 k -> new ConcurrentHashMap<>());
@@ -4667,7 +4720,7 @@ public class TrainAIController {
     }
 
     static Method findMethod(Class<?> cls, String name, Class<?>... paramTypes) {
-        // ── Static cache lookup (keyed by name + param count to avoid ambiguity) ──
+// Static cache lookup (keyed by name + param count to avoid ambiguity)
         String cacheKey = cls.getName();
         String methodKey = name + "/" + paramTypes.length;
         ConcurrentHashMap<String, Method> classCache = METHOD_CACHE.computeIfAbsent(cacheKey,
@@ -4700,7 +4753,7 @@ public class TrainAIController {
         return null;
     }
 
-    // ─── Utility ───
+// Utility
 
     /**
      * Compute the EDGE-TO-EDGE gap between two trains (direction-aware).
@@ -4709,13 +4762,13 @@ public class TrainAIController {
      * Front overhang from position ≈ 3 blocks (half of one carriage).
      * Rear overhang from position ≈ trainLength - 3 blocks.
      *
-     * Which end faces the other train depends on heading:
+     * Which end faces the other train depends on heading
      * - If B is AHEAD of A (dot > 0): A's FRONT (3b) faces B
      * - If B is BEHIND A (dot < 0): A's REAR (trainLength-3) faces B
      *
      * Same logic applies to B looking at A.
      *
-     * v1.0.4 used trainLength/2 for both sides which was WRONG:
+     * used trainLength/2 for both sides which was WRONG
      * - Same-direction: subtracted too little from the leader (should be full rear)
      * - Head-on: subtracted too much from both (should be just 3+3=6)
      *
@@ -4816,7 +4869,7 @@ public class TrainAIController {
         }
     }
 
-    // ─── Player Safety System (v1.0.3) ───
+// Player Safety System ()
 
     /**
      * Scan for players standing on or near the tracks within the configured range
@@ -4845,7 +4898,7 @@ public class TrainAIController {
             if (player.isSpectator() || !player.isAlive())
                 continue;
             // Skip players riding any entity (train passengers, horses, etc.)
-            // — they are NOT "on tracks", they are controlled by the vehicle.
+// they are NOT "on tracks", they are controlled by the vehicle.
             // Without this, safe mode brakes for its OWN passengers.
             if (player.isPassenger())
                 continue;
@@ -4917,7 +4970,7 @@ public class TrainAIController {
         boolean samePlayer = player.getUUID().equals(warningPlayerUUID);
 
         if (hasWhistleBlock) {
-            // ── Phase 1: Whistle warning ──
+// Phase 1: Whistle warning
             if (!samePlayer || playerWhistleStartTick < 0) {
                 // Start new warning cycle for this player
                 playerWhistleStartTick = currentTick;
@@ -4945,7 +4998,7 @@ public class TrainAIController {
             // Warning expired and player still on tracks — fall through to emergency brake
         }
 
-        // ── Phase 2: Graduated emergency braking ──
+// Phase 2: Graduated emergency braking
         if (distance <= emergencyStop * 2) {
             // Very close — hard stop
             smoothStop();
@@ -5110,32 +5163,43 @@ public class TrainAIController {
      * disabling their collision detection entirely → chain crashes.
      */
     private boolean detectPlayerRiding(ServerLevel level) {
-        // ── Layer 1: carriages reflection ──
+        // Direct train manual flags
+        if (createTrainRef != null) {
+            Field manualF = findField(createTrainRef.getClass(), "manualTick");
+            if (manualF != null) {
+                try {
+                    if (manualF.getBoolean(createTrainRef)) return true;
+                } catch (Exception ignored) {}
+            }
+            Field bwDriver = findField(createTrainRef.getClass(), "backwardsDriver");
+            if (bwDriver != null) {
+                try {
+                    Object driver = bwDriver.get(createTrainRef);
+                    if (driver instanceof net.minecraft.world.entity.player.Player p && p.isAlive() && !p.isSpectator()) return true;
+                } catch (Exception ignored) {}
+            }
+        }
+
+        // Layer 1: carriages reflection (ControlsBlock controlling player, seats, passengers)
         if (carriagesField != null && createTrainRef != null) {
             try {
                 List<?> carriages = (List<?>) carriagesField.get(createTrainRef);
                 if (carriages != null) {
                     for (Object carriage : carriages) {
-                        // Try multiple method names Create uses across versions
                         for (String mName : new String[]{"anyAvailableEntity", "entity", "getEntity", "getContraptionEntity"}) {
                             Method anyEnt = findMethod(carriage.getClass(), mName);
                             if (anyEnt == null) continue;
                             try {
                                 Object entityObj = anyEnt.invoke(carriage);
-                                // Handle Optional<Entity>
                                 if (entityObj instanceof java.util.Optional<?> opt) {
                                     entityObj = opt.orElse(null);
                                 }
                                 if (entityObj instanceof net.minecraft.world.entity.Entity e) {
-                                    for (net.minecraft.world.entity.Entity p : e.getPassengers()) {
-                                        if (p instanceof net.minecraft.world.entity.player.Player player
-                                                && player.isAlive() && !player.isSpectator()) return true;
-                                    }
+                                    if (checkContraptionEntityPlayer(e, level)) return true;
                                 }
                             } catch (Exception ignored) {}
-                            break; // found method, tried it — move to next carriage
+                            break;
                         }
-                        // Also try direct "entity" field
                         try {
                             Field entField = findField(carriage.getClass(), "entity");
                             if (entField != null) {
@@ -5144,10 +5208,7 @@ public class TrainAIController {
                                     entityObj = opt.orElse(null);
                                 }
                                 if (entityObj instanceof net.minecraft.world.entity.Entity e) {
-                                    for (net.minecraft.world.entity.Entity p : e.getPassengers()) {
-                                        if (p instanceof net.minecraft.world.entity.player.Player player
-                                                && player.isAlive() && !player.isSpectator()) return true;
-                                    }
+                                    if (checkContraptionEntityPlayer(e, level)) return true;
                                 }
                             }
                         } catch (Exception ignored) {}
@@ -5156,45 +5217,111 @@ public class TrainAIController {
             } catch (Exception ignored) {}
         }
 
-        // ── Layer 2: world entity scan — only OUR carriage entities ──
-        // Scans a tight box (5 blocks) and only matches entities whose train UUID
-        // equals THIS controller's trainId to avoid false positives from adjacent trains.
+        // Layer 2: ControlsServerHandler receivedInputs
+        try {
+            Class<?> cshClass = Class.forName("com.simibubi.create.content.contraptions.actors.trainControls.ControlsServerHandler");
+            Field f = findField(cshClass, "receivedInputs");
+            if (f != null) {
+                Object wa = f.get(null);
+                if (wa != null) {
+                    Method getMap = findMethod(wa.getClass(), "get");
+                    if (getMap != null) {
+                        Map<?, ?> map = (Map<?, ?>) getMap.invoke(wa, level);
+                        if (map != null && !map.isEmpty()) {
+                            for (Object ctx : map.values()) {
+                                if (ctx != null) {
+                                    Field entityField = findField(ctx.getClass(), "entity");
+                                    if (entityField != null) {
+                                        Object ent = entityField.get(ctx);
+                                        if (isEntityOfOurTrain(ent)) return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        // Layer 3: world entity scan — only OUR carriage entities
         if (currentPosition != null && createTrainRef != null) {
             net.minecraft.world.phys.AABB box = new net.minecraft.world.phys.AABB(
-                    currentPosition.getX() - 5, currentPosition.getY() - 4, currentPosition.getZ() - 5,
-                    currentPosition.getX() + 5, currentPosition.getY() + 4, currentPosition.getZ() + 5);
+                    currentPosition.getX() - 6, currentPosition.getY() - 5, currentPosition.getZ() - 6,
+                    currentPosition.getX() + 6, currentPosition.getY() + 5, currentPosition.getZ() + 6);
             try {
                 List<net.minecraft.world.entity.Entity> near = level.getEntitiesOfClass(
                         net.minecraft.world.entity.Entity.class, box);
                 for (net.minecraft.world.entity.Entity entity : near) {
                     String sn = entity.getClass().getSimpleName();
                     if (!sn.contains("Carriage") && !sn.contains("Contraption")) continue;
-                    // Guard: only count carriages belonging to OUR train
-                    // Check by seeing if this entity is referenced in our own carriage list
-                    boolean isOurCarriage = false;
-                    try {
-                        List<?> carriages = (List<?>) carriagesField.get(createTrainRef);
-                        if (carriages != null) {
-                            for (Object c : carriages) {
-                                for (String mName : new String[]{"anyAvailableEntity", "entity", "getEntity"}) {
-                                    Method m = findMethod(c.getClass(), mName);
-                                    if (m == null) continue;
-                                    Object eObj = m.invoke(c);
-                                    if (eObj instanceof java.util.Optional<?> opt) eObj = opt.orElse(null);
-                                    if (entity.equals(eObj)) { isOurCarriage = true; break; }
-                                }
-                                if (isOurCarriage) break;
-                            }
-                        }
-                    } catch (Exception ignored) {}
-                    if (!isOurCarriage) continue;
-                    for (net.minecraft.world.entity.Entity passenger : entity.getPassengers()) {
-                        if (passenger instanceof net.minecraft.world.entity.player.Player player
-                                && player.isAlive() && !player.isSpectator()) return true;
+                    if (!isEntityOfOurTrain(entity)) continue;
+                    if (checkContraptionEntityPlayer(entity, level)) return true;
+                }
+            } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
+    private boolean checkContraptionEntityPlayer(net.minecraft.world.entity.Entity e, ServerLevel level) {
+        // 1. ControlsBlock controlling player
+        Method getCtrlPlayer = findMethod(e.getClass(), "getControllingPlayer");
+        if (getCtrlPlayer != null) {
+            try {
+                Object opt = getCtrlPlayer.invoke(e);
+                if (opt instanceof java.util.Optional<?> o && o.isPresent()) {
+                    Object uuidObj = o.get();
+                    if (uuidObj instanceof UUID u) {
+                        net.minecraft.world.entity.player.Player p = level.getPlayerByUUID(u);
+                        if (p != null && p.isAlive() && !p.isSpectator()) return true;
                     }
                 }
             } catch (Exception ignored) {}
         }
+        // 2. contraption seats
+        Method getContraption = findMethod(e.getClass(), "getContraption");
+        if (getContraption != null) {
+            try {
+                Object contraption = getContraption.invoke(e);
+                if (contraption != null) {
+                    Method getSeatMapping = findMethod(contraption.getClass(), "getSeatMapping");
+                    if (getSeatMapping != null) {
+                        Map<?, ?> seatMap = (Map<?, ?>) getSeatMapping.invoke(contraption);
+                        if (seatMap != null) {
+                            for (Object uidKey : seatMap.keySet()) {
+                                if (uidKey instanceof UUID u) {
+                                    net.minecraft.world.entity.player.Player p = level.getPlayerByUUID(u);
+                                    if (p != null && p.isAlive() && !p.isSpectator()) return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        // 3. Entity passengers
+        for (net.minecraft.world.entity.Entity p : e.getPassengers()) {
+            if (p instanceof net.minecraft.world.entity.player.Player player
+                    && player.isAlive() && !player.isSpectator()) return true;
+        }
+        return false;
+    }
+
+    private boolean isEntityOfOurTrain(Object entity) {
+        if (entity == null || carriagesField == null || createTrainRef == null) return false;
+        try {
+            List<?> carriages = (List<?>) carriagesField.get(createTrainRef);
+            if (carriages != null) {
+                for (Object c : carriages) {
+                    for (String mName : new String[]{"anyAvailableEntity", "entity", "getEntity"}) {
+                        Method m = findMethod(c.getClass(), mName);
+                        if (m == null) continue;
+                        Object eObj = m.invoke(c);
+                        if (eObj instanceof java.util.Optional<?> opt) eObj = opt.orElse(null);
+                        if (entity.equals(eObj)) return true;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
         return false;
     }
 
@@ -5214,7 +5341,7 @@ public class TrainAIController {
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    // ─── Getters ───
+// Getters
 
     public UUID getTrainId() {
         return trainId;
@@ -5264,7 +5391,7 @@ public class TrainAIController {
         this.currentPosition = pos;
     }
 
-    // ── Control-panel API ──
+// Control-panel API
     public boolean isChatSilenced() {
         return chatSilenced;
     }
@@ -5300,7 +5427,7 @@ public class TrainAIController {
         this.trainDisplayName = n == null ? "" : n;
     }
 
-    // ─── TrackGraph Getters (for debug visualizer and external tools) ───
+// TrackGraph Getters (for debug visualizer and external tools)
     /**
      * Signal block group UUIDs this train currently occupies (from Create's
      * occupiedSignalBlocks).
@@ -5421,7 +5548,7 @@ public class TrainAIController {
         return createTrainRef;
     }
 
-    // ── v1.0.7: Getters for TrainAIManager.buildScanMaps() ──
+// Getters for TrainAIManager.buildScanMaps()
 
     /** Forward node (TravellingPoint.node2). May be null. */
     public Object getLeadingNode2() { return myLeadingNode2; }
@@ -5430,7 +5557,7 @@ public class TrainAIController {
     public Object getReverseLeadingEdge() { return myReverseLeadingEdge; }
 
     /**
-     * v1.0.8 Fix #6: Distance from leading position to forward node (node2).
+     * Distance from leading position to forward node (node2).
      * Used by buildScanMaps() for junction distance tie-breaking.
      */
     public double getDistanceToLeadingNode2() {
@@ -5458,7 +5585,7 @@ public class TrainAIController {
     }
 
     /**
-     * v1.0.8 Fix #5: Extract the best (closest, non-filtered) controller from
+     * Extract the best (closest, non-filtered) controller from
      * an EdgeOccupancy. Iterates first/second, applies filterGlobalHit() to each,
      * returns the one closest to our leading edge position.
      *
@@ -5488,7 +5615,7 @@ public class TrainAIController {
     @Override
     public String toString() {
         return String.format("TrainAI[%s, state=%s, speed=%.2f, pos=%s]",
-                trainId.toString().substring(0, 8), currentState, currentSpeed,
+                shortId, currentState, currentSpeed,
                 currentPosition != null ? currentPosition.toShortString() : "null");
     }
 }

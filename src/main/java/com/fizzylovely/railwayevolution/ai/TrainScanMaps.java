@@ -3,20 +3,20 @@ package com.fizzylovely.railwayevolution.ai;
 import java.util.IdentityHashMap;
 
 /**
- * Global per-tick scan maps (v1.0.7, updated v1.0.8) — built once by
+ * Global per-tick scan maps (, updated ) — built once by
  * TrainAIManager, consumed by each TrainAIController.graphWalkScan().
  *
  * Replaces per-controller O(n) map-building loops with O(1) lookups.
  * All maps use IdentityHashMap because Create's TrackEdge / TrackNode
  * objects are compared by reference identity, not equals().
  *
- * v1.0.8 Fix #5: edgeToTrain now stores EdgeOccupancy (multi-train)
+ * edgeToTrain now stores EdgeOccupancy (multi-train)
  * instead of a single TrainAIController. Pool of 128 EdgeOccupancy
  * objects eliminates per-tick allocations.
  */
 public final class TrainScanMaps {
 
-    // ─── EdgeOccupancy pool (zero-allocation) ─────────────────────────────
+// EdgeOccupancy pool (ation)
     private static final int POOL_SIZE = 128;
     private final EdgeOccupancy[] pool = new EdgeOccupancy[POOL_SIZE];
     private int poolPtr = 0;
@@ -39,11 +39,11 @@ public final class TrainScanMaps {
         return occ;
     }
 
-    // ─── Maps ─────────────────────────────────────────────────────────────
+// Maps
 
     /**
      * edge (identity) → EdgeOccupancy with all controllers on this edge.
-     * v1.0.8: Changed from single TrainAIController to EdgeOccupancy
+     * : Changed from single TrainAIController to EdgeOccupancy
      * to support multiple trains on the same edge (e.g. leading + trailing).
      */
     public final IdentityHashMap<Object, EdgeOccupancy> edgeToTrain = new IdentityHashMap<>();

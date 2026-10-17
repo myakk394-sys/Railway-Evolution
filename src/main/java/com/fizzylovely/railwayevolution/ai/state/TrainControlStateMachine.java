@@ -8,24 +8,7 @@ import java.util.EnumMap;
 import java.util.Map;
 
 /**
- * TrainControlStateMachine — главный конечный автомат управления поездом.
- *
- * Архитектура Authority Layers (приоритет сверху вниз):
- *   [LAYER 0] SafetyVeto       ← блокирует опасные команды даже игрока
- *   [LAYER 1] PlayerOverride   ← немедленный захват управления игроком (0 задержки)
- *   [LAYER 2] AIStateMachine   ← нормальная логика AI
- *   [LAYER 3] CreateNavigation ← базовая навигация Create (не трогаем)
- *
- * Ключевые гарантии:
- *   1. Переход в PLAYER_OVERRIDE происходит НЕМЕДЛЕННО при playerControlled=true.
- *      Без задержки в 1 тик (которая была в старом коде).
- *   2. SafetyManager применяется даже в PLAYER_OVERRIDE, но только для
- *      физического перекрытия и схода с рельс.
- *   3. FLOW_FOLLOWER — новое состояние экосистемной интеграции.
- *
- * Потокобезопасность: только серверный поток.
- *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
+ * Конечный автомат управления поездом.
  */
 public final class TrainControlStateMachine {
 
@@ -34,8 +17,6 @@ public final class TrainControlStateMachine {
 
     private TrainControlState currentState;
     private long              stateEnteredTick = 0;
-
-    // ──────────────────────────────────────────────────────────────────────
 
     public TrainControlStateMachine() {
         this.safety = new SafetyManager();
@@ -52,61 +33,39 @@ public final class TrainControlStateMachine {
         map.put(TrainStateId.WAIT_FOR_CLEARANCE, new WaitForClearanceState());
         map.put(TrainStateId.REVERSING,          new ReversingState());
         map.put(TrainStateId.TRAFFIC_JAM,        new TrafficJamState());
-        // PlayerOverrideState нужен SafetyManager
         map.put(TrainStateId.PLAYER_OVERRIDE,    new PlayerOverrideState(safety));
         return map;
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Главный тик
-    // ──────────────────────────────────────────────────────────────────────
-
-    /**
-     * Обработать один тик.
-     *
-     * Вызывается ПОСЛЕ заполнения ctx из ITrainHandle и ПОСЛЕ
-     * завершения PerceptionEngine.scan() (ctx.obstacleProfile уже готов).
-     *
-     * @param ctx контекст текущего тика (уже заполнен)
-     */
     public void tick(TrainControlContext ctx) {
-
-        // ── LAYER 1: Player Override ─────────────────────────────────────
+        // Управление игроком
         if (ctx.playerControlled) {
             if (currentState.getId() != TrainStateId.PLAYER_OVERRIDE) {
-                // Проверяем разрешение текущего состояния
                 if (currentState.allowsPlayerOverride(ctx)) {
                     transitionTo(TrainStateId.PLAYER_OVERRIDE, ctx);
                 }
-                // Если не разрешает (overlap) — SafetyManager уже обрабатывает
             }
-            // PLAYER_OVERRIDE.tick() сам применяет SafetyVeto
             tickCurrentState(ctx);
             return;
         }
 
-        // ── LAYER 1 EXIT: Игрок отпустил управление ──────────────────────
+        // Возврат из ручного управления
         if (currentState.getId() == TrainStateId.PLAYER_OVERRIDE) {
             transitionTo(TrainStateId.CRUISING, ctx);
         }
 
-        // ── LAYER 0: SafetyManager pre-check ────────────────────────────
-        // Применяем к текущей скорости (не к запрошенной командой)
-        // чтобы поймать залипший overlap/derail
+        // Проверка безопасности
         SafetyManager.SafetyResult preCheck = safety.evaluate(ctx, ctx.speed);
         if (preCheck.blocks()
                 || preCheck.verdict() == SafetyManager.Verdict.CLAMP_SPEED
                 || preCheck.verdict() == SafetyManager.Verdict.EMERGENCY_FOLLOW_BRAKE) {
             safety.applyVerdict(preCheck, ctx);
-            // Safety is the top authority: no state may overwrite this tick's speed.
             return;
         }
 
-        // ── LAYER 2: AI State Machine ────────────────────────────────────
         tickCurrentState(ctx);
     }
 
-    // ──────────────────────────────────────────────────────────────────────
 
     private void tickCurrentState(TrainControlContext ctx) {
         TrainStateId next = currentState.tick(ctx);
@@ -145,9 +104,8 @@ public final class TrainControlStateMachine {
         currentState.onEnter(ctx);
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Public API
-    // ──────────────────────────────────────────────────────────────────────
 
     public TrainStateId getCurrentStateId()      { return currentState.getId(); }
     public long         getStateEnteredTick()     { return stateEnteredTick; }

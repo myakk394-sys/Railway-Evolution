@@ -8,14 +8,13 @@ import org.jetbrains.annotations.Nullable;
 /**
  * AnalyzingObstacleState — анализ препятствия с кинематическим торможением.
  *
- * Переходы:
+ * Переходы
  *   → CRUISING           если препятствие исчезло
  *   → FLOW_FOLLOWER      если препятствие стало flow-кандидатом
  *   → YIELDING           если скорость ≈ 0 (заторможены до нуля)
  *   → WAIT_FOR_CLEARANCE если дистанция критическая
  *   → TRAFFIC_JAM        если зажаты
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class AnalyzingObstacleState implements TrainControlState {
 
@@ -43,16 +42,33 @@ public final class AnalyzingObstacleState implements TrainControlState {
         // Переход в FLOW если условия сложились
         if (obs.isFlowCandidate) return TrainStateId.FLOW_FOLLOWER;
 
-        // Высокий риск → WFC
+        // Высокий риск без учёта приоритета
         if (obs.riskScore >= 0.85) return TrainStateId.WAIT_FOR_CLEARANCE;
 
-        // Кинематическое торможение
+        // ---- Priority-aware yield decision ----
+        // Определяем: должен ли наш поезд уступить препятствию?
+        // Правило: уступает тот, чей приоритет НИЖЕ.
+        // При равном приоритете — уступает по умолчанию (дистанция решается на уровне junction).
+        com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel myPriority  = ctx.selfPriority;
+        com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel obsPriority = obs.obstaclePriority;
+
+        boolean shouldYield = myPriority.shouldYieldTo(obsPriority);
+
+        // Кинематическое торможение (всегда — безопасность первична)
         double targetSpeed = computeTargetSpeed(ctx, obs);
         applySpeedControl(ctx, targetSpeed);
 
-        // Остановились — переходим в YIELDING (ожидаем дальнейших событий)
+        // Остановились
         if (Math.abs(ctx.speed) < STOPPED_SPEED_THRESHOLD && targetSpeed < STOPPED_SPEED_THRESHOLD) {
-            return TrainStateId.YIELDING;
+            if (shouldYield) {
+                // Мы должны уступить — переходим в YIELDING (полное ожидание)
+                return TrainStateId.YIELDING;
+            } else {
+                // Мы имеем равный или более высокий приоритет.
+                // Переходим в WFC — удерживаем позицию, ожидаем пока препятствие уберётся.
+                // WFC не эскалирует в REVERSING из-за junction — только из-за safety timeout.
+                return TrainStateId.WAIT_FOR_CLEARANCE;
+            }
         }
 
         return null;

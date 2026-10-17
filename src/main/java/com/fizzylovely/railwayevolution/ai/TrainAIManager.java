@@ -13,7 +13,7 @@ import java.util.IdentityHashMap;
 /**
  * Train AI Manager — global singleton managing all train AI controllers.
  *
- * Discovers Create Mod trains via reflection:
+ * Discovers Create Mod trains via reflection
  *   Create.RAILWAYS (GlobalRailwayManager) -> trains (Map<UUID, Train>)
  *
  * Each discovered train gets a TrainAIController that reads position/speed
@@ -28,10 +28,10 @@ public class TrainAIManager {
     private long lastTrainScanTick = 0;
     private long lastDiagnosticTick = 0;
 
-    // v1.0.7: Global per-tick scan maps — built once in buildScanMaps(), consumed by all controllers
+// Global per-tick scan maps — built once in buildScanMaps(), consumed by all controllers
     private final TrainScanMaps scanMaps = new TrainScanMaps();
 
-    // ── Global Priority Registry ──
+// Global Priority Registry
     // When a train has been starved (yielded too many times consecutively) it
     // is granted a priority token here. Other trains check this registry before
     // deciding whether to yield — if the approaching train has a token, they
@@ -84,9 +84,11 @@ public class TrainAIManager {
         StoppedTrainRegistry.getInstance().clear();
         MovingTrainRegistry.getInstance().clear();
         JunctionReservationManager.getInstance().clear();
-        // v1.0.5: Reset ecosystem registry (AI + player train handles)
+// Reset ecosystem registry (AI + player train handles)
         EcosystemRegistry.reset();
-        CreateRailwayMod.aiLog("[AI Manager] Initialized with fresh VBS, accident zones, train registries, junction reservations, and EcosystemRegistry");
+// Reset priority registry
+        com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance().clear();
+        CreateRailwayMod.aiLog("[AI Manager] Initialized with fresh VBS, accident zones, train registries, junction reservations, EcosystemRegistry, and PriorityRegistry");
     }
 
     public static TrainAIManager getInstance() {
@@ -106,7 +108,7 @@ public class TrainAIManager {
             lastTrainScanTick = currentTick;
         }
 
-        // v1.0.5: Refresh EcosystemRegistry VarHandle cache (fast path, 0 boxing)
+// Refresh EcosystemRegistry VarHandle cache (fast path, 0 boxing)
         // Must run BEFORE controller ticks so PerceptionEngine has fresh data
         EcosystemRegistry eco = EcosystemRegistry.getInstance();
         eco.tickRefreshAll(currentTick);
@@ -117,7 +119,7 @@ public class TrainAIManager {
             eco.scanPlayerControls(level);
         }
 
-        // v1.0.7: Build global scan maps BEFORE controller ticks.
+// Build global scan maps BEFORE controller ticks.
         // One O(n) pass replaces the 3×n per-controller loops that were in graphWalkScan().
         // Controllers read the pre-built maps via getScanMaps() → O(1) lookups.
         buildScanMaps();
@@ -298,7 +300,7 @@ public class TrainAIManager {
                 } else {
                     controllers.get(id).bindCreateTrain(entry.getValue());
                 }
-                // v1.0.5: Register in EcosystemRegistry for PerceptionEngine + PlayerTrainHandle
+// Register in EcosystemRegistry for PerceptionEngine + PlayerTrainHandle
                 eco.getOrCreateAiHandle(id, entry.getValue());
             }
 
@@ -309,8 +311,10 @@ public class TrainAIManager {
                     StoppedTrainRegistry.getInstance().remove(id);
                     MovingTrainRegistry.getInstance().remove(id);
                     JunctionReservationManager.getInstance().releaseAll(id);
-                    // v1.0.5: Remove from EcosystemRegistry
+// Remove from EcosystemRegistry
                     eco.removeTrainHandle(id);
+// Remove from PriorityRegistry
+                    com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance().remove(id);
                     CreateRailwayMod.aiLog("[AI Manager] Detached AI from train {}", id.toString().substring(0, 8));
                     return true;
                 }
@@ -340,13 +344,13 @@ public class TrainAIManager {
         }
     }
 
-    // ─── Public API ───
+// Public API
 
     public Collection<TrainAIController> getAllControllers() {
         return Collections.unmodifiableCollection(controllers.values());
     }
 
-    /** v1.0.7: Pre-built global scan maps (never null). */
+    /** : Pre-built global scan maps (never null). */
     public TrainScanMaps getScanMaps() {
         return scanMaps;
     }
@@ -366,14 +370,16 @@ public class TrainAIManager {
             StoppedTrainRegistry.getInstance().remove(trainId);
             MovingTrainRegistry.getInstance().remove(trainId);
             JunctionReservationManager.getInstance().releaseAll(trainId);
-            // v1.0.8 Fix #8: Remove ghost handle immediately (was only in scanForTrains)
+            // Remove ghost handle immediately (was only in scanForTrains)
             EcosystemRegistry.getInstance().removeTrainHandle(trainId);
+            // Remove priority data
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance().remove(trainId);
         }
     }
 
     /**
-     * v1.0.7: Build global scan maps in a single O(n) pass.
-     * v1.0.8 Fix #5: edgeToTrain now stores EdgeOccupancy (multi-train per edge).
+     * : Build global scan maps in a single O(n) pass.
+     * edgeToTrain now stores EdgeOccupancy (multi-train per edge).
      *
      * Populates edgeToTrain, reverseEdgeMap, and junctionApproachMap
      * from ALL controllers. Per-train filtering (self, bypass, etc.)
@@ -388,8 +394,8 @@ public class TrainAIManager {
         scanMaps.clear();
 
         for (TrainAIController ctrl : controllers.values()) {
-            // ── edgeToTrain: leading + trailing edge → EdgeOccupancy ──
-            // v1.0.8: computeIfAbsent + add instead of putIfAbsent.
+// edgeToTrain: leading + trailing edge → EdgeOccupancy
+// computeIfAbsent + add instead of putIfAbsent.
             // Multiple trains on the same edge are all registered.
             Object leadEdge = ctrl.getLeadingEdge();
             Object trailEdge = ctrl.getTrailingEdge();
@@ -404,7 +410,7 @@ public class TrainAIManager {
                     .add(ctrl);
             }
 
-            // ── reverseEdgeMap: pre-computed reverse edge → controller ──
+// reverseEdgeMap: pre-computed reverse edge → controller
             // Each controller computes myReverseLeadingEdge in readTrackGraphData().
             // This is the edge(node2→node1) — the reverse of their forward direction.
             // When our BFS walks edge(node1→node2), this map detects head-on trains.
@@ -412,8 +418,8 @@ public class TrainAIManager {
             if (revEdge != null)
                 scanMaps.reverseEdgeMap.putIfAbsent(revEdge, ctrl);
 
-            // ── junctionApproachMap: node2 → closest controller approaching ──
-            // v1.0.8 Fix #6: Distance tie-break — closest train to junction wins.
+// junctionApproachMap: node2 → closest controller approaching
+            // Distance tie-break — closest train to junction wins.
             // Also populates junctionApproachDist (was declared but never filled).
             Object node2 = ctrl.getLeadingNode2();
             if (node2 != null && leadEdge != null && ctrl.getCurrentPosition() != null) {

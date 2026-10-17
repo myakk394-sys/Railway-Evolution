@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * position as an "accident zone". Other trains approaching that area slow down
  * aggressively BEFORE getting close enough to cause their own cascade crash.
  *
- * This prevents the "accordion" effect:
+ * This prevents the "accordion" effect
  *   Train A stops (crash zone registered).
  *   Train B sees zone at 25+ blocks and decelerates gradually → stops 15 blocks back.
  *   Train C sees Train B at 50 blocks, brakes → stops 15 blocks behind B.

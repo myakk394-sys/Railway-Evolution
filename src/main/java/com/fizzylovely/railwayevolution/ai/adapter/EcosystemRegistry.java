@@ -12,20 +12,19 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * EcosystemRegistry — реестр ВСЕХ участников железнодорожного трафика.
  *
- * Объединяет в единый список:
+ * Объединяет в единый список
  *   - AI-поезда (Create1211TrainHandle)
  *   - Поезда под управлением игроков (PlayerTrainHandle)
  *
  * PerceptionEngine запрашивает allHandles() для скана — получает полный
  * список без различия между AI и игроком. Экосистема едина.
  *
- * Обновление:
+ * Обновление
  *   - AI-хэндлы обновляются при scanForTrains() из TrainAIManager.
  *   - Player-хэндлы создаются/удаляются при detectPlayerControlled().
  *
  * Потокобезопасность: только серверный поток (NeoForge tick).
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class EcosystemRegistry {
 
@@ -53,7 +52,6 @@ public final class EcosystemRegistry {
     private final Set<UUID> stillControlledBuf = new HashSet<>();
 
 
-    // ──────────────────────────────────────────────────────────────────────
 
     public static EcosystemRegistry getInstance() {
         if (instance == null) instance = new EcosystemRegistry();
@@ -66,9 +64,8 @@ public final class EcosystemRegistry {
 
     private EcosystemRegistry() {}
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // AI-хэндлы
-    // ──────────────────────────────────────────────────────────────────────
 
     /**
      * Зарегистрировать или обновить AI-хэндл для поезда.
@@ -105,9 +102,8 @@ public final class EcosystemRegistry {
         return aiHandles.get(trainId);
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Player-хэндлы
-    // ──────────────────────────────────────────────────────────────────────
 
     /**
      * Обновить статус управления игроком для поезда.
@@ -152,14 +148,13 @@ public final class EcosystemRegistry {
         return playerHandles.containsKey(trainId);
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Snapshot — единый список для PerceptionEngine
-    // ──────────────────────────────────────────────────────────────────────
 
     /**
      * Обновить снимок (если нужно) и вернуть текущий список участников.
      *
-     * Возвращает:
+     * Возвращает
      *   - PlayerTrainHandle для поездов под управлением игрока (приоритет).
      *   - Create1211TrainHandle для остальных.
      *
@@ -189,9 +184,8 @@ public final class EcosystemRegistry {
         snapshotDirty = true;
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Tick-обновление
-    // ──────────────────────────────────────────────────────────────────────
 
     /**
      * Обновить все AI-хэндлы (лёгкие данные каждый тик).
@@ -201,7 +195,7 @@ public final class EcosystemRegistry {
         for (Create1211TrainHandle handle : aiHandles.values()) {
             handle.refreshFast();
             updatePlayerControl(handle.getId(), handle.getControllingPlayerUUID(), null);
-            // v1.0.8 Fix #3: Moving trains refresh positions every tick (no lag).
+            // Moving trains refresh positions every tick (no lag).
             // Stationary trains (speed ≤ 0.01) don't drift → every 10 ticks is safe.
             double speed = Math.abs(handle.getSpeed());
             if (speed > 0.01 || currentTick % 10 == 0) {
@@ -261,7 +255,6 @@ public final class EcosystemRegistry {
         return null;
     }
 
-    // ──────────────────────────────────────────────────────────────────────
 
     public int getAiTrainCount()     { return aiHandles.size(); }
     public int getPlayerTrainCount() { return playerHandles.size(); }

@@ -8,28 +8,27 @@ import org.jetbrains.annotations.Nullable;
 /**
  * FlowFollowerState — следование в потоке за попутным поездом.
  *
- * Ключевое состояние экосистемной интеграции:
+ * Ключевое состояние экосистемной интеграции
  * вместо полного останова AI «едет вместе» с лидером (AI или игрок),
  * держа безопасную дистанцию и адаптируя скорость под лидера.
  *
  * Поезда игрока обрабатываются идентично AI-поездам, но SafetyManager
  * агрессивнее реагирует на резкое торможение игрока.
  *
- * Переходы:
+ * Переходы
  *   → CRUISING           если лидер ушёл далеко (> FLOW_MAX) или исчез
  *   → ANALYZING_OBSTACLE если lидер остановился или риск высокий
  *   → WAIT_FOR_CLEARANCE если дистанция критическая
  *   → TRAFFIC_JAM        если зажаты
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class FlowFollowerState implements TrainControlState {
 
-    // ─── Тайминги ─────────────────────────────────────────────────────────
+// Тайминги
     private long enteredTick = 0;
     private static final int  MIN_TICKS_BEFORE_EXIT = 10; // не вылетать сразу
 
-    // ─── Плавное следование ───────────────────────────────────────────────
+// Плавное следование
     /**
      * Коэффициент инерции скорости: новая скорость = lerp(текущая, целевая, α).
      * α=0.15 → плавное, без дёрганий.
@@ -48,7 +47,7 @@ public final class FlowFollowerState implements TrainControlState {
      */
     private static final double DEAD_ZONE = 2.0;
 
-    // ─── Пороги переходов ─────────────────────────────────────────────────
+// Пороги переходов
     private static final double STOP_RISK_THRESHOLD = 0.70; // высокий риск → WFC
     private static final double LEADER_STOPPED_SPEED = 0.05; // лидер стоит
 
@@ -58,6 +57,11 @@ public final class FlowFollowerState implements TrainControlState {
     @Override
     public void onEnter(TrainControlContext ctx) {
         enteredTick = ctx.currentTick;
+        // Сброс aging — поезд возобновил движение в потоке
+        if (ctx.selfHandle != null) {
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry
+                .getInstance().resetAging(ctx.selfHandle.getId());
+        }
         CreateRailwayMod.aiDebug("[FSM] {} → FLOW_FOLLOWER (leader={}, player={})",
             shortId(ctx),
             ctx.obstacleProfile != null && ctx.obstacleProfile.obstacleId != null
@@ -74,7 +78,7 @@ public final class FlowFollowerState implements TrainControlState {
     public @Nullable TrainStateId tick(TrainControlContext ctx) {
         ObstacleProfile obs = ctx.obstacleProfile;
 
-        // ── Проверка продолжения потока ───────────────────────────────────
+// Проверка продолжения потока
         if (obs == null || !obs.hasObstacle()) {
             // Лидер исчез — возвращаемся к обычному движению
             if (ctx.currentTick - enteredTick >= MIN_TICKS_BEFORE_EXIT) {
@@ -113,7 +117,7 @@ public final class FlowFollowerState implements TrainControlState {
     /**
      * Вычислить и применить целевую скорость следования в потоке.
      *
-     * Логика дистанционного управления (PD-контроллер без деривативного члена):
+     * Логика дистанционного управления (PD-контроллер без деривативного члена)
      *   - dist < TARGET-DEAD_ZONE → слишком близко: скорость ниже лидера
      *   - dist in DEAD_ZONE → удерживаем скорость лидера
      *   - dist > TARGET+DEAD_ZONE → отстаём: скорость = лидер

@@ -10,7 +10,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  */
 public class RailwayConfig {
 
-    // ─── Runtime toggles (changed via /railway command, not persisted to TOML) ───
+// Runtime toggles (changed via /railway command, not persisted to TOML)
     /** When false, all AI log messages (info/debug/warn) are suppressed. Default: OFF. */
     public static volatile boolean loggingEnabled = false;
     /** When true, trains detect and brake for players on tracks. Default: ON. */
@@ -23,27 +23,27 @@ public class RailwayConfig {
 
     public static final ModConfigSpec SPEC;
 
-    // ─── Obstacle Detection ───
+// Obstacle Detection
     public static final ModConfigSpec.DoubleValue obstacleDetectionRange;
 
-    // ─── Virtual Block System (VBS) ───
+// Virtual Block System (VBS)
     public static final ModConfigSpec.LongValue reservationTTLTicks;
     public static final ModConfigSpec.IntValue maxLookaheadSegments;
     public static final ModConfigSpec.IntValue vbsCleanupIntervalTicks;
 
-    // ─── Right-of-Way ───
+// Right-of-Way
     public static final ModConfigSpec.DoubleValue minimumStopDistance;
     public static final ModConfigSpec.LongValue maxYieldTicks;
 
-    // ─── Reverse Maneuver ───
+// Reverse Maneuver
     public static final ModConfigSpec.BooleanValue reverseManeuverEnabled;
     public static final ModConfigSpec.DoubleValue reverseBackupDistance;
     public static final ModConfigSpec.DoubleValue reverseSpeed;
 
-    // ─── Manager ───
+// Manager
     public static final ModConfigSpec.IntValue trainScanIntervalTicks;
 
-    // ─── Player Safety System ───
+// Player Safety System
     public static final ModConfigSpec.BooleanValue playerSafetyEnabled;
     public static final ModConfigSpec.DoubleValue playerDetectionRange;
     public static final ModConfigSpec.DoubleValue playerEmergencyStopDistance;

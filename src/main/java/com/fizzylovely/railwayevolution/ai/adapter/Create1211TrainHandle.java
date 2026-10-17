@@ -21,17 +21,16 @@ import java.util.*;
  * Ядро (PerceptionEngine, StateMachine, SafetyManager) не импортирует
  * классы Create.
  *
- * Производительность:
+ * Производительность
  *   - VarHandle для примитивов: нулевое боксирование (getSpeed, getThrottle...).
  *   - MethodHandle для методов: быстрее Class.getMethod().invoke().
  *   - Тяжёлые данные (граф, рёбра, сигнальные группы) кешируются.
  *   - Инициализация: ровно один раз при bindCreateTrain().
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class Create1211TrainHandle implements ITrainHandle {
 
-    // ─── Static VarHandle/MethodHandle (один раз для всех экземпляров) ────
+// Static VarHandle/MethodHandle (один раз для всех экземпляров)
     private static volatile boolean STATIC_INIT_DONE = false;
     private static VarHandle VH_SPEED;
     private static VarHandle VH_TARGET_SPEED;
@@ -73,7 +72,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
     private static VarHandle VH_RUNTIME;
     private static VarHandle VH_RUNTIME_PAUSED;
 
-    // ─── Экземплярные поля ────────────────────────────────────────────────
+// Экземплярные поля
     private Object createTrainRef;
     private final UUID id;
     private String displayName = "";
@@ -99,7 +98,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
     @Nullable private Object  cachedLeadNode2    = null;
     private double             cachedEdgePos      = 0;
 
-    // v1.0.8 Fix #10: Trailing carriage graph data
+    // Trailing carriage graph data
     @Nullable private Object  cachedTrailEdge    = null;
     @Nullable private Object  cachedTrailNode1   = null;
     @Nullable private Object  cachedTrailNode2   = null;
@@ -109,15 +108,14 @@ public final class Create1211TrainHandle implements ITrainHandle {
     @Nullable private Create1211TrainGraph graphAdapter = null;
     @Nullable private Object               lastGraphRef = null;
 
-    // ─── Ленивая кешированная сигнальные группы ───────────────────────────
+// Ленивая кешированная сигнальные группы
     private final List<UUID> cachedSignalGroups = new ArrayList<>();
     private long signalGroupRefreshTick = -1;
 
-    // ─── Кеш позиций тележек ──────────────────────────────────────────────
+// Кеш позиций тележек
     private final List<Vec3> bogeyPositions = new ArrayList<>();
     private double cachedTotalLength = 4.0;
 
-    // ──────────────────────────────────────────────────────────────────────
 
     public Create1211TrainHandle(UUID id) {
         this.id = id;
@@ -132,9 +130,8 @@ public final class Create1211TrainHandle implements ITrainHandle {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // ITrainHandle implementation
-    // ──────────────────────────────────────────────────────────────────────
 
     @Override public UUID getId()          { return id; }
     @Override public String getDisplayName() { return displayName; }
@@ -223,7 +220,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
     @Override public @Nullable Object getLeadingNode2Ref()  { return cachedLeadNode2; }
     @Override public double getLeadingEdgePosition()        { return cachedEdgePos; }
 
-    // v1.0.8 Fix #10: Trailing edge getters
+    // Trailing edge getters
     @Override public @Nullable Object getTrailingEdgeRef()  { return cachedTrailEdge; }
     @Override public @Nullable Object getTrailingNode1Ref() { return cachedTrailNode1; }
     @Override public @Nullable Object getTrailingNode2Ref() { return cachedTrailNode2; }
@@ -268,9 +265,8 @@ public final class Create1211TrainHandle implements ITrainHandle {
         catch (Exception e) { /* ignore */ }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Cache refresh (вызывается каждый тик из TrainAIController)
-    // ──────────────────────────────────────────────────────────────────────
 
     /**
      * Обновить лёгкие данные (скорость, флаги) — каждый тик.
@@ -296,9 +292,8 @@ public final class Create1211TrainHandle implements ITrainHandle {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Private refresh methods
-    // ──────────────────────────────────────────────────────────────────────
 
     private void refreshNavigationFast() {
         if (VH_NAVIGATION == null || createTrainRef == null) return;
@@ -339,7 +334,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
                 }
             }
 
-            // v1.0.8 Fix #10: Trailing carriage graph data
+            // Trailing carriage graph data
             Object trailingPoint = MH_GET_TRAILING_PT != null
                 ? MH_GET_TRAILING_PT.invoke(lastCarriage) : null;
             if (trailingPoint != null) {
@@ -375,7 +370,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
                 if (VH_TP_EDGE  != null) cachedLeadEdge  = VH_TP_EDGE.get(tp);
                 if (VH_TP_POSITION != null) cachedEdgePos = (double) VH_TP_POSITION.get(tp);
             } else {
-                // v1.0.8 Fix #10: Extract trailing TravellingPoint data
+                // Extract trailing TravellingPoint data
                 if (VH_TP_NODE1 != null) cachedTrailNode1 = VH_TP_NODE1.get(tp);
                 if (VH_TP_NODE2 != null) cachedTrailNode2 = VH_TP_NODE2.get(tp);
                 if (VH_TP_EDGE  != null) cachedTrailEdge  = VH_TP_EDGE.get(tp);
@@ -390,6 +385,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
      * authorizes manual control.
      */
     private void refreshControllingPlayer() {
+        UUID oldPlayerId = cachedControllingPlayerId;
         cachedControllingPlayerId = null;
         boolean manualRequested = false;
         if (VH_MANUAL_TICK != null && createTrainRef != null) {
@@ -401,6 +397,7 @@ public final class Create1211TrainHandle implements ITrainHandle {
 
         if (VH_CARRIAGES == null || createTrainRef == null || MH_ANY_ENTITY == null) {
             cachedManualTick = false;
+            updatePriorityRegistration(oldPlayerId, null);
             return;
         }
         try {
@@ -408,15 +405,28 @@ public final class Create1211TrainHandle implements ITrainHandle {
             if (carriages == null) {
                 cachedManualTick = false;
                 clearStaleRuntimePause();
+                updatePriorityRegistration(oldPlayerId, null);
                 return;
             }
             for (Object carriage : carriages) {
                 Object entity = MH_ANY_ENTITY.invoke(carriage);
                 if (!(entity instanceof net.minecraft.world.entity.Entity root)) continue;
+
+                // 1. Check Create's contraption controlling player (ControlsBlock)
+                UUID controlling = findContraptionControllingPlayer(root);
+                if (controlling != null) {
+                    cachedControllingPlayerId = controlling;
+                    cachedManualTick = true;
+                    updatePriorityRegistration(oldPlayerId, controlling);
+                    return;
+                }
+
+                // 2. Check passengers / seat mapping
                 UUID playerId = findPassengerPlayer(root);
                 if (playerId != null) {
                     cachedControllingPlayerId = playerId;
                     cachedManualTick = manualRequested;
+                    updatePriorityRegistration(oldPlayerId, playerId);
                     return;
                 }
             }
@@ -424,7 +434,31 @@ public final class Create1211TrainHandle implements ITrainHandle {
 
         // No real driver: clear stale Create state so schedules continue normally.
         cachedManualTick = false;
+        updatePriorityRegistration(oldPlayerId, null);
         clearStaleRuntimePause();
+    }
+
+    private void updatePriorityRegistration(@Nullable UUID oldId, @Nullable UUID newId) {
+        if (newId != null) {
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance()
+                    .setPlayerControlled(this.id);
+        } else if (oldId != null) {
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry.getInstance()
+                    .clearPlayerControlled(this.id);
+        }
+    }
+
+    @Nullable
+    private static UUID findContraptionControllingPlayer(net.minecraft.world.entity.Entity entity) {
+        try {
+            java.lang.reflect.Method m = entity.getClass().getMethod("getControllingPlayer");
+            Object opt = m.invoke(entity);
+            if (opt instanceof java.util.Optional<?> o && o.isPresent()) {
+                Object val = o.get();
+                if (val instanceof UUID u) return u;
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 
     @Nullable
@@ -433,6 +467,25 @@ public final class Create1211TrainHandle implements ITrainHandle {
                 && player.isAlive() && !player.isSpectator()) {
             return player.getUUID();
         }
+        // Check contraption seats
+        try {
+            java.lang.reflect.Method getContraption = entity.getClass().getMethod("getContraption");
+            Object contraption = getContraption.invoke(entity);
+            if (contraption != null) {
+                java.lang.reflect.Method getSeatMapping = contraption.getClass().getMethod("getSeatMapping");
+                Map<?, ?> seatMap = (Map<?, ?>) getSeatMapping.invoke(contraption);
+                if (seatMap != null) {
+                    for (Object uidKey : seatMap.keySet()) {
+                        if (uidKey instanceof UUID u) {
+                            net.minecraft.world.entity.player.Player p = entity.level().getPlayerByUUID(u);
+                            if (p != null && p.isAlive() && !p.isSpectator()) {
+                                return p.getUUID();
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
         for (net.minecraft.world.entity.Entity passenger : entity.getPassengers()) {
             UUID playerId = findPassengerPlayer(passenger);
             if (playerId != null) return playerId;
@@ -480,9 +533,8 @@ public final class Create1211TrainHandle implements ITrainHandle {
         catch (Exception e) { return null; }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Static initialization (один раз на JVM)
-    // ──────────────────────────────────────────────────────────────────────
 
     private static synchronized void initStaticHandles() {
         if (STATIC_INIT_DONE) return;

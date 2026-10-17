@@ -10,51 +10,49 @@ import java.util.UUID;
 /**
  * PerceptionEngine — сканирует траекторию поезда без GC-мусора.
  *
- * Алгоритм:
+ * Алгоритм
  *   1. Multi-layer scan: сначала BFS-граф (точно), затем физический proximity.
  *   2. BFS использует пул объектов (NodeEntry[BFS_QUEUE_SIZE]).
  *   3. Visited-множество через version-array: O(1) сброс без Arrays.fill.
  *   4. Swept Bezier: промежуточные точки кривых проверяются (не только концы).
  *   5. Поезда игрока сканируются идентично AI — через ITrainHandle.
  *
- * Экосистемная интеграция:
+ * Экосистемная интеграция
  *   ObstacleProfile.isFlowCandidate указывает StateMachine перейти в
  *   FLOW_FOLLOWER вместо торможения к нулю.
  *
  * Один экземпляр на TrainAIController (не переиспользуется между поездами).
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class PerceptionEngine {
 
-    // ─── BFS пул ──────────────────────────────────────────────────────────
+// BFS пул
     private static final int BFS_QUEUE_SIZE = 512;
     private final BfsNodeEntry[] bfsQueue   = new BfsNodeEntry[BFS_QUEUE_SIZE];
     private int bfsHead, bfsTail;
 
-    // ─── Visited через version (O(1) reset) ───────────────────────────────
+// Visited через version (O(1) reset)
     // Индекс = System.identityHashCode(nodeRef) & (VISITED_SIZE-1)
     // Значение = currentScanVersion → visited в этом скане
     private static final int VISITED_SIZE   = 1024; // степень двойки
     private final int[]  visitedVersion     = new int[VISITED_SIZE];
     private int          scanVersion        = 0;
 
-    // ─── Переиспользуемый профиль результата ──────────────────────────────
+// Переиспользуемый профиль результата
     private final ObstacleProfile result   = new ObstacleProfile();
 
-    // ─── Переиспользуемый proximity-буфер ────────────────────────────────
+// Переиспользуемый proximity-буфер
     // При proximity-скане не создаём список — итерируем напрямую
     private ITrainHandle[] allHandles      = new ITrainHandle[64];
     private int            allHandlesCount = 0;
 
-    // ─── Константы ────────────────────────────────────────────────────────
+// Константы
     private static final int   BEZIER_SAMPLES     = 5;    // точек на кривую
     private static final double SAME_TRACK_Y_TOL  = 5.0;  // блоки по Y
     private static final double PROXIMITY_RANGE   = 20.0; // блоки физсканирования
     private static final double PROXIMITY_DOT     = 0.3;  // cos угла (72° конус)
     private static final double PROXIMITY_LATERAL = 4.0;  // блоки бокового допуска
 
-    // ──────────────────────────────────────────────────────────────────────
 
     public PerceptionEngine() {
         for (int i = 0; i < BFS_QUEUE_SIZE; i++) {
@@ -62,9 +60,8 @@ public final class PerceptionEngine {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Главный метод сканирования
-    // ──────────────────────────────────────────────────────────────────────
 
     /**
      * Выполнить скан траектории.
@@ -87,7 +84,7 @@ public final class PerceptionEngine {
         result.clear();
         scanVersion++;
 
-        // ── Layer 1: BFS-граф (только если есть граф) ────────────────────
+// Layer 1: BFS-граф (только если есть граф)
         ITrainGraph graph = selfHandle.getGraph();
         Object node1 = selfHandle.getLeadingNode1Ref();
         Object node2 = selfHandle.getLeadingNode2Ref();
@@ -99,11 +96,11 @@ public final class PerceptionEngine {
             ctx.graphScanRan = true;
         }
 
-        // ── Layer 2: Физический proximity-скан (всегда) ──────────────────
+// Layer 2: Физический proximity-скан (всегда)
         // Перебираем candidates — нет аллокаций (итерируем Iterable напрямую)
         proximityScan(selfHandle, ctx, candidates, maxRange);
 
-        // ── После заполнения: финальные вычисления ───────────────────────
+// После заполнения: финальные вычисления
         if (result.hasObstacle()) {
             result.computeRiskScore(maxRange);
             result.evaluateFlowCandidate(Math.abs(ctx.speed));
@@ -111,14 +108,15 @@ public final class PerceptionEngine {
             ctx.obstacleIsFlowCandidate = result.isFlowCandidate;
             ctx.flowLeaderSpeed         = result.flowTargetSpeed;
             ctx.flowLeaderIsPlayer      = result.leaderIsPlayer;
+            // Обновить приоритет препятствия (для FSM yield-решений)
+            ctx.obstaclePriority        = result.obstaclePriority;
         }
 
         return result.hasObstacle() ? result : null;
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // BFS по графу
-    // ──────────────────────────────────────────────────────────────────────
 
     private void bfsScan(
             ITrainHandle self, TrainControlContext ctx,
@@ -160,7 +158,7 @@ public final class PerceptionEngine {
                     startEdgePos, true, graph, ctx);
         }
 
-        // ── BFS ──────────────────────────────────────────────────────────
+// BFS
         while (bfsHead != bfsTail) {
             BfsNodeEntry entry = bfsQueue[bfsHead & (BFS_QUEUE_SIZE - 1)];
             bfsHead++;
@@ -234,7 +232,7 @@ public final class PerceptionEngine {
             ITrainHandle candidate = allHandles[i];
             if (candidate == self) continue;
 
-            // v1.0.8 Fix #10: Check BOTH leading and trailing edge
+            // Check BOTH leading and trailing edge
             Object candidateEdge = candidate.getLeadingEdgeRef();
             Object candidateTrailEdge = candidate.getTrailingEdgeRef();
             boolean leadingMatch  = (candidateEdge != null && candidateEdge == edgeNative);
@@ -287,7 +285,7 @@ public final class PerceptionEngine {
         List<net.minecraft.world.phys.Vec3> points = edge.sampleCurve(BEZIER_SAMPLES);
         if (points == null || points.size() < 2) return;
 
-        // v1.0.8 Fix #13: Cache self graph for identity check
+        // Cache self graph for identity check
         ITrainGraph myGraph = self.getGraph();
 
         for (int p = 1; p < points.size() - 1; p++) {
@@ -300,7 +298,7 @@ public final class PerceptionEngine {
                 ITrainHandle candidate = allHandles[i];
                 if (candidate == self) continue;
 
-                // v1.0.8 Fix #13: Skip trains on different graphs (parallel curves)
+                // Skip trains on different graphs (parallel curves)
                 if (!sharesTrackGraph(myGraph, candidate)) {
                     continue;
                 }
@@ -331,9 +329,8 @@ public final class PerceptionEngine {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Физический proximity-скан (последний рубеж обороны)
-    // ──────────────────────────────────────────────────────────────────────
 
     private void proximityScan(
             ITrainHandle self, TrainControlContext ctx,
@@ -346,13 +343,13 @@ public final class PerceptionEngine {
         double hx = ctx.headingX;
         double hz = ctx.headingZ;
 
-        // v1.0.8 Fix #12: Cache self graph for identity check
+        // Cache self graph for identity check
         ITrainGraph myGraph = self.getGraph();
 
         for (ITrainHandle candidate : candidates) {
             if (candidate.getId().equals(self.getId())) continue;
 
-            // v1.0.8 Fix #12: Skip trains on different graphs (parallel tracks)
+            // Skip trains on different graphs (parallel tracks)
             if (!sharesTrackGraph(myGraph, candidate)) {
                 continue;
             }
@@ -406,7 +403,7 @@ public final class PerceptionEngine {
                 }
             }
 
-            // v1.0.8 Fix #9: Recalculate closing speed for head-on
+            // Recalculate closing speed for head-on
             double closing = candidateHeadOn
                 ? mySpeed + cSpeed      // approaching each other
                 : mySpeed - cSpeed * dot; // same direction
@@ -426,9 +423,8 @@ public final class PerceptionEngine {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Вспомогательные методы
-    // ──────────────────────────────────────────────────────────────────────
 
     /** Построить массив хэндлов кандидатов (нет аллокаций — переиспользуем поле). */
     private void buildHandleIndex(ITrainHandle self, Iterable<ITrainHandle> candidates) {
@@ -478,8 +474,8 @@ public final class PerceptionEngine {
         return false;
     }
 
-    // ─── Version-based visited set with open addressing (v1.0.8 Fix #4) ────
-    // Pre-v1.0.8: simple hash → version, no collision handling.
+// Version-based visited set with open addressing ()
+    // Pre-: simple hash → version, no collision handling.
     // Two nodes with identityHashCode(a) & 1023 == identityHashCode(b) & 1023
     // would collide silently → BFS skipped entire graph branches.
     // Now: linear probing with MAX_PROBES, storing nodeRef for identity check.
@@ -522,7 +518,7 @@ public final class PerceptionEngine {
         return false; // Probing exhausted — treat as not visited (safe: may re-visit)
     }
 
-    // ─── BFS node entry (пул объектов) ────────────────────────────────────
+// BFS node entry (пул объектов)
 
     private static final class BfsNodeEntry {
         Object nodeRef;

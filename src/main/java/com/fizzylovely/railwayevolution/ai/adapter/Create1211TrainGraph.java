@@ -25,19 +25,18 @@ import java.util.Map;
  * Для минимизации аллокаций: IGraphEdgeEntry и ITrackEdge возвращаются
  * из пуля (перезаписываемые объекты).
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class Create1211TrainGraph implements ITrainGraph {
 
     private final Object graphRef; // com.simibubi.create.content.trains.graph.TrackGraph
 
-    // ─── Пул объектов для getEdgesFrom (нет аллокаций в горячем пути) ────
+// Пул объектов для getEdgesFrom (нет аллокаций в горячем пути)
     private static final int INITIAL_EDGE_POOL_SIZE = 16;
     private EdgeEntryImpl[] edgePool  = new EdgeEntryImpl[INITIAL_EDGE_POOL_SIZE];
     private EdgeImpl[]      edgeImplPool = new EdgeImpl[INITIAL_EDGE_POOL_SIZE];
     private final List<IGraphEdgeEntry> edgeList = new ArrayList<>(INITIAL_EDGE_POOL_SIZE);
 
-    // ─── Static MethodHandles (один раз) ──────────────────────────────────
+// Static MethodHandles (один раз)
     private static volatile boolean INIT_DONE = false;
     private static MethodHandle MH_GET_CONNECTIONS_FROM; // Map<TrackNode, TrackEdge>
     private static MethodHandle MH_NODE_DEGREE;
@@ -49,7 +48,6 @@ public final class Create1211TrainGraph implements ITrainGraph {
     private static VarHandle    VH_EDGE_TURN;            // BezierConnection
     private static MethodHandle MH_BEZIER_SAMPLE;        // BezierConnection.getPosition(t) → Vec3
 
-    // ──────────────────────────────────────────────────────────────────────
 
     public Create1211TrainGraph(Object graphRef) {
         this.graphRef = graphRef;
@@ -60,9 +58,8 @@ public final class Create1211TrainGraph implements ITrainGraph {
         if (!INIT_DONE) initStatic();
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // ITrainGraph
-    // ──────────────────────────────────────────────────────────────────────
 
     @Override
     @SuppressWarnings("unchecked")
@@ -166,9 +163,8 @@ public final class Create1211TrainGraph implements ITrainGraph {
     @Override public boolean isSameGraph(Object otherGraphRef) { return graphRef == otherGraphRef; }
     @Override public Object  getNativeRef()                    { return graphRef; }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Внутренний ITrackEdge адаптер
-    // ──────────────────────────────────────────────────────────────────────
 
     private final class EdgeImpl implements ITrackEdge {
         private Object nativeEdge;
@@ -251,7 +247,7 @@ public final class Create1211TrainGraph implements ITrainGraph {
         return 1.0;
     }
 
-    // ─── Pooled EdgeEntry ─────────────────────────────────────────────────
+// Pooled EdgeEntry
 
     private static final class EdgeEntryImpl implements IGraphEdgeEntry {
         private Object     neighborNodeRef;
@@ -266,9 +262,8 @@ public final class Create1211TrainGraph implements ITrainGraph {
         @Override public ITrackEdge getEdge()            { return edge; }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+
     // Static init
-    // ──────────────────────────────────────────────────────────────────────
 
     private static synchronized void initStatic() {
         if (INIT_DONE) return;

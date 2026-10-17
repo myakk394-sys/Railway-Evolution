@@ -3,24 +3,9 @@ package com.fizzylovely.railwayevolution.ai.core;
 import java.util.UUID;
 
 /**
- * SafetyManager — единственный хранитель права на вето команды скорости.
- *
- * Вызывается для ЛЮБОГО изменения скорости — как от AI-состояний,
- * так и от команды игрока. Только в экстремальных ситуациях (физическое
- * перекрытие, сход с рельс) блокирует даже игрока.
- *
- * Экосистемная интеграция:
- *   - Поезд игрока = «авторитетный участник». Его скорость не изменяется.
- *   - Но SafetyManager оценивает риск ДЛЯ НАШЕГО поезда когда мы едем
- *     за игроком, и ограничивает нашу скорость если игрок резко тормозит.
- *
- * Потокобезопасен (только чтение полей конфига, нет общего состояния).
- *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
+ * Проверка и ограничение скорости поезда по условиям безопасности.
  */
 public final class SafetyManager {
-
-    // ─── Вердикты ─────────────────────────────────────────────────────────
 
     public enum Verdict {
         /** Команда разрешена. */
@@ -39,13 +24,20 @@ public final class SafetyManager {
     }
 
     public static final class SafetyResult {
-        public final Verdict verdict;
+        public Verdict verdict;
         /** Максимально допустимая скорость. Double.MAX_VALUE = без ограничений. */
-        public final double maxAllowedSpeed;
+        public double maxAllowedSpeed;
 
         public SafetyResult(Verdict verdict, double maxAllowedSpeed) {
             this.verdict = verdict;
             this.maxAllowedSpeed = maxAllowedSpeed;
+        }
+
+        /** установить поля на месте (для переиспользуемого экземпляра). */
+        public SafetyResult set(Verdict v, double maxSpeed) {
+            this.verdict = v;
+            this.maxAllowedSpeed = maxSpeed;
+            return this;
         }
 
         public static final SafetyResult ALLOW_FULL =
@@ -59,7 +51,7 @@ public final class SafetyManager {
         public Verdict verdict() { return verdict; }
     }
 
-    // ─── Параметры ────────────────────────────────────────────────────────
+// Параметры
 
     /** Блоки — зона перекрытия (требует немедленной блокировки). */
     private static final double OVERLAP_VETO_THRESHOLD = 2.0;
@@ -83,7 +75,9 @@ public final class SafetyManager {
     private double prevLeaderSpeed = Double.NaN;
     private UUID prevLeaderId;
 
-    // ──────────────────────────────────────────────────────────────────────
+    /** Переиспользуемый результат — для горячего пути evaluate(). */
+    private final SafetyResult reusable = new SafetyResult(Verdict.ALLOW, Double.MAX_VALUE);
+
 
     /**
      * Оценить допустимость команды скорости {@code requestedSpeed}
@@ -94,48 +88,38 @@ public final class SafetyManager {
      * @return SafetyResult с вердиктом и максимальной допустимой скоростью
      */
     public SafetyResult evaluate(TrainControlContext ctx, double requestedSpeed) {
-
-        // ── VETO 1: Сход с рельс — полная блокировка, включая игрока ──────
         if (ctx.derailed) {
             resetLeaderTracking();
-            return new SafetyResult(Verdict.VETO_DERAIL, 0);
+            return reusable.set(Verdict.VETO_DERAIL, 0);
         }
 
         ObstacleProfile obs = ctx.obstacleProfile;
-
-        // ── VETO 2: Физическое перекрытие — блокируем даже игрока ──────────
         if (obs != null && obs.hasObstacle() && obs.isOverlapping
                 && requestedSpeed > 0) {
             resetLeaderTracking();
-            return new SafetyResult(Verdict.VETO_COLLISION, 0);
+            return reusable.set(Verdict.VETO_COLLISION, 0);
         }
 
-        // ── Красный сигнал — только для AI (игрок решает сам) ──────────────
         if (!ctx.playerControlled
                 && ctx.createWaitingForSignal
                 && ctx.createDistToSignal < 3.0
                 && requestedSpeed > 0) {
-            return new SafetyResult(Verdict.CLAMP_SPEED, 0);
+            return reusable.set(Verdict.CLAMP_SPEED, 0);
         }
 
-        // ── Нет препятствия → разрешаем ────────────────────────────────────
         if (obs == null || !obs.hasObstacle()) {
             resetLeaderTracking();
             return SafetyResult.ALLOW_FULL;
         }
 
         double dist = obs.distance;
-
-        // ── CLAMP: критическая зона ─────────────────────────────────────────
         if (dist <= CRITICAL_CLAMP_THRESHOLD && requestedSpeed > 0) {
-            // Кинематически безопасная скорость: v = sqrt(2 * a * (d - buffer))
             double buffer     = Math.min(2.0, dist * 0.25);
             double kinematic  = Math.sqrt(2 * ctx.acceleration * Math.max(0, dist - buffer));
             double clampSpeed = Math.max(0, Math.min(Math.abs(requestedSpeed), kinematic));
-            return new SafetyResult(Verdict.CLAMP_SPEED, clampSpeed);
+            return reusable.set(Verdict.CLAMP_SPEED, clampSpeed);
         }
 
-        // ── FLOW_FOLLOWER: детектирование резкого торможения лидера ────────
         if (obs.isFlowCandidate || obs.isDeparting) {
             double leaderSpeed = obs.obstacleSpeed;
 
@@ -148,7 +132,7 @@ public final class SafetyManager {
                     double emergencyTarget = leaderSpeed * EMERGENCY_FOLLOW_SPEED_FACTOR;
                     prevLeaderSpeed = leaderSpeed;
                     prevLeaderId = obs.obstacleId;
-                    return new SafetyResult(Verdict.EMERGENCY_FOLLOW_BRAKE, emergencyTarget);
+                    return reusable.set(Verdict.EMERGENCY_FOLLOW_BRAKE, emergencyTarget);
                 }
             }
             prevLeaderSpeed = leaderSpeed;

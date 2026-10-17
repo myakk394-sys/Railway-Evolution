@@ -24,7 +24,7 @@ public class CreateRailwayMod {
     public static final String MOD_ID = "create_railway";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    // ─── Conditional AI logging (respects /railway log toggle) ───
+// Conditional AI logging (respects /railway log toggle)
 
     /** Log at INFO level only when AI logging is enabled via /railway log true. */
     public static void aiLog(String format, Object... args) {

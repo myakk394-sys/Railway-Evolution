@@ -13,11 +13,11 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Global registry of all MOVING trains — complements StoppedTrainRegistry.
  *
- * Together they cover ALL trains:
+ * Together they cover ALL trains
  * - StoppedTrainRegistry: speed < 0.02 or derailed
  * - MovingTrainRegistry:  speed >= 0.02 and not derailed
  *
- * Why needed:
+ * Why needed
  * - BFS graph walk misses trains during edge transitions (TravellingPoint updates lag)
  * - Beam scan misses trains on curves (heading doesn't follow track geometry)
  * - This registry provides a pure position+velocity fallback that works regardless
@@ -27,7 +27,6 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * Thread-safe via ConcurrentHashMap.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public class MovingTrainRegistry {
 
@@ -86,6 +85,18 @@ public class MovingTrainRegistry {
                     headingZ * speed * ticks);
         }
     }
+
+    /** distance comparator — reused across getNearby() calls. */
+    private static final class DistanceComparator implements java.util.Comparator<MovingTrain> {
+        Vec3 origin;
+        @Override
+        public int compare(MovingTrain a, MovingTrain b) {
+            Vec3 pa = a.precisePosition != null ? a.precisePosition : Vec3.atCenterOf(a.blockPosition);
+            Vec3 pb = b.precisePosition != null ? b.precisePosition : Vec3.atCenterOf(b.blockPosition);
+            return Double.compare(origin.distanceToSqr(pa), origin.distanceToSqr(pb));
+        }
+    }
+    private static final DistanceComparator DIST_CMP = new DistanceComparator();
 
     private final ConcurrentHashMap<UUID, MovingTrain> registry = new ConcurrentHashMap<>();
 
@@ -166,12 +177,9 @@ public class MovingTrainRegistry {
             }
         }
 
-        // Sort nearest first
-        result.sort((a, b) -> {
-            Vec3 pa = a.precisePosition != null ? a.precisePosition : Vec3.atCenterOf(a.blockPosition);
-            Vec3 pb = b.precisePosition != null ? b.precisePosition : Vec3.atCenterOf(b.blockPosition);
-            return Double.compare(position.distanceToSqr(pa), position.distanceToSqr(pb));
-        });
+        // Sort nearest first — static comparator
+        DIST_CMP.origin = position;
+        result.sort(DIST_CMP);
 
         return result;
     }

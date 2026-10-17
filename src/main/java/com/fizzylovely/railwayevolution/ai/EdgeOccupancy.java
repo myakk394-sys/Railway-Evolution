@@ -1,13 +1,13 @@
 package com.fizzylovely.railwayevolution.ai;
 
 /**
- * v1.0.8 Fix #5: Multi-occupancy container for a single TrackEdge.
+ * Multi-occupancy container for a single TrackEdge.
  *
  * Replaces the old putIfAbsent(edge → single controller) in TrainScanMaps.
  * Stores up to 2 controllers per edge (first + second). In practice, 3+
  * trains on one edge is extremely rare (would require sub-block spacing).
  *
- * Designed for zero-allocation: instances are pooled and reused via
+ * Designed for ation: instances are pooled and reused via
  * {@link TrainScanMaps#acquireOccupancy()}.
  */
 public final class EdgeOccupancy {

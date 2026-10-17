@@ -46,7 +46,7 @@ public class ModItems {
             });
 
     /**
-     * AI Debug Goggles — when worn in the helmet slot, shows:
+     * AI Debug Goggles — when worn in the helmet slot, shows
      *   - The 50-block forward scan beam (END_ROD particles)
      *   - VBS track occupation (FLAME particles at reserved segment midpoints)
      *   - Action-bar text with state/speed info for all trains within 141 blocks

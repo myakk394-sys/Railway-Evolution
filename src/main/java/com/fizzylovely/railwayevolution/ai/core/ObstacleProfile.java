@@ -1,5 +1,7 @@
 package com.fizzylovely.railwayevolution.ai.core;
 
+import com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel;
+import com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.UUID;
@@ -14,23 +16,30 @@ import java.util.UUID;
  * «нашли/не нашли» — непрерывный {@link #riskScore} [0..1], позволяющий
  * StateMachine плавно управлять скоростью.
  *
- * Экосистемная интеграция:
+ * Экосистемная интеграция
  *   Поезда под управлением игрока обрабатываются ИДЕНТИЧНО AI-поездам,
  *   но {@link #leaderIsPlayer} сигнализирует SafetyManager о повышенной
  *   реакции на резкое торможение игрока.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class ObstacleProfile {
 
-    // ─── Идентификация ────────────────────────────────────────────────────
+// Идентификация
     /** UUID обнаруженного поезда-препятствия. null = чисто. */
     @Nullable public UUID obstacleId;
 
     /** Является ли лидер поездом под управлением игрока. */
     public boolean leaderIsPlayer;
 
-    // ─── Геометрия ────────────────────────────────────────────────────────
+    /**
+     * Эффективный уровень приоритета препятствия.
+     * Заполняется в updateIfCloser() при смене основного кандидата.
+     * PLAYER для поездов игрока, иначе из TrainPriorityRegistry.
+     * Используется AnalyzingObstacleState и YieldingState для yield-решений.
+     */
+    public TrainPriorityLevel obstaclePriority;
+
+// Геометрия
     /**
      * Расстояние от головы нашего поезда до хвоста препятствия (блоки).
      * Отрицательное → физическое перекрытие (overlap emergency).
@@ -41,9 +50,9 @@ public final class ObstacleProfile {
     /** Расстояние найдено через BFS-граф (более точно на кривых). */
     public boolean distanceIsGraphBased;
 
-    // ─── Кинематика препятствия ───────────────────────────────────────────
+// Кинематика препятствия
     /**
-     * Скорость сближения (б/тик):
+     * Скорость сближения (б/тик)
      *   > 0 → мы приближаемся к препятствию (опасно).
      *   < 0 → препятствие удаляется быстрее нас.
      *   = 0 → параллельное движение.
@@ -53,7 +62,7 @@ public final class ObstacleProfile {
     /** Абсолютная скорость препятствия (б/тик). */
     public double obstacleSpeed;
 
-    // ─── Классификация ────────────────────────────────────────────────────
+// Классификация
     /**
      * Препятствие движется навстречу нам (лоб в лоб).
      * Наивысший приоритет — немедленная остановка или разъезд.
@@ -73,22 +82,22 @@ public final class ObstacleProfile {
     public boolean isParkingZone;
 
     /**
-     * FLOW_FOLLOWER кандидат:
+     * FLOW_FOLLOWER кандидат
      * isDeparting=true AND скорости сопоставимы AND дистанция в [FLOW_MIN..FLOW_MAX].
      * При true StateMachine переходит в FLOW_FOLLOWER вместо YIELDING.
      */
     public boolean isFlowCandidate;
 
     /**
-     * Целевая скорость для следования в потоке:
+     * Целевая скорость для следования в потоке
      * min(leaderSpeed, кинематически безопасная скорость).
      * Устанавливается только при isFlowCandidate=true.
      */
     public double flowTargetSpeed;
 
-    // ─── Риск ─────────────────────────────────────────────────────────────
+// Риск
     /**
-     * Непрерывный score риска [0.0 .. 1.0]:
+     * Непрерывный score риска [0.0 .. 1.0]
      *   0.0 = препятствие далеко, безопасно
      *   1.0 = немедленная опасность столкновения
      *
@@ -97,25 +106,25 @@ public final class ObstacleProfile {
      */
     public double riskScore;
 
-    // ─── Перекрёсток ──────────────────────────────────────────────────────
+// Перекрёсток
     public boolean junctionBlocked;
     public boolean junctionHasSpace;
     @Nullable public UUID junctionYieldToId;
 
-    // ─── Авариное перекрытие ──────────────────────────────────────────────
+// Авариное перекрытие
     /**
      * true если distance ≤ OVERLAP_THRESHOLD (≈ 0 блоков).
      * Требует немедленной остановки независимо от riskScore.
      */
     public boolean isOverlapping;
 
-    // ─── Константы ────────────────────────────────────────────────────────
+// Константы
     public static final double FLOW_MIN_DISTANCE     = 6.0;   // ближе → YIELDING, не FLOW
     public static final double FLOW_MAX_DISTANCE     = 40.0;  // дальше → обычный CRUISING
     public static final double FLOW_SPEED_TOLERANCE  = 0.15;  // б/тик — разница скоростей
     public static final double OVERLAP_THRESHOLD     = 1.0;   // блоки — считать перекрытием
 
-    // v1.0.8 Fix #11: Per-category tracking (zero-alloc)
+    // Per-category tracking ()
     public double nearestHeadOnDist          = Double.MAX_VALUE;
     @Nullable public UUID nearestHeadOnId;
     public double nearestSameDirectionDist   = Double.MAX_VALUE;
@@ -128,12 +137,12 @@ public final class ObstacleProfile {
     // Primary candidate is selected after every scan candidate has been collected.
     private double primarySelectionScore     = Double.NEGATIVE_INFINITY;
 
-    // ──────────────────────────────────────────────────────────────────────
 
     /** Очистка перед новым сканом. Нулевых аллокаций. */
     public void clear() {
         obstacleId          = null;
         leaderIsPlayer      = false;
+        obstaclePriority    = TrainPriorityLevel.NORMAL;
         distance            = Double.MAX_VALUE;
         distanceIsGraphBased = false;
         closingSpeed        = 0;
@@ -148,7 +157,7 @@ public final class ObstacleProfile {
         junctionHasSpace    = true;
         junctionYieldToId   = null;
         isOverlapping       = false;
-        // v1.0.8 Fix #11: Reset categories
+        // Reset categories
         nearestHeadOnDist        = Double.MAX_VALUE;
         nearestHeadOnId          = null;
         nearestSameDirectionDist = Double.MAX_VALUE;
@@ -242,6 +251,9 @@ public final class ObstacleProfile {
         primarySelectionScore     = candidateRisk;
         this.obstacleId           = candidateId;
         this.leaderIsPlayer       = candidateIsPlayer;
+        this.obstaclePriority     = candidateIsPlayer
+            ? TrainPriorityLevel.PLAYER
+            : TrainPriorityRegistry.getInstance().getEffectivePriority(candidateId);
         this.distance             = candidateDist;
         this.distanceIsGraphBased = candidateDistGraphBased;
         this.obstacleSpeed        = candidateObstacleSpeed;
@@ -279,7 +291,7 @@ public final class ObstacleProfile {
             return;
         }
 
-        // Условия для FLOW_FOLLOWER:
+        // Условия для FLOW_FOLLOWER
         // 1. Препятствие движется в том же направлении (не навстречу, не стоит)
         // 2. Дистанция в безопасном диапазоне
         // 3. Скорость лидера >= нашей (он не тормозит перед нами)

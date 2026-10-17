@@ -13,7 +13,6 @@ import org.jetbrains.annotations.Nullable;
  * Гистерезис (wfcDistHistory) предотвращает мерцание между WFC и CRUISING
  * при краевых условиях (поезд на изгибе, дистанция нестабильна).
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class WaitForClearanceState implements TrainControlState {
 
