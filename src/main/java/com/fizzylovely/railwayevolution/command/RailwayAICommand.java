@@ -4,20 +4,26 @@ import com.fizzylovely.railwayevolution.ai.TrainAIController;
 import com.fizzylovely.railwayevolution.ai.TrainAIManager;
 import com.fizzylovely.railwayevolution.ai.TrainState;
 import com.fizzylovely.railwayevolution.ai.VirtualBlockSystem;
+import com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel;
+import com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry;
 import com.fizzylovely.railwayevolution.config.RailwayConfig;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 
 import java.util.Collection;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * /railway — main command tree for Railway Evolution mod.
  *
- * Usage:
+ * Usage
  *   /railway                          — show all tracked trains + toggle states
  *   /railway reload                   — force re-scan for trains
  *   /railway log true|false           — toggle AI console logging on/off
@@ -64,7 +70,26 @@ public class RailwayAICommand {
                         .then(Commands.argument("value", com.mojang.brigadier.arguments.IntegerArgumentType.integer(1, 10))
                             .executes(ctx -> setBrakingSharpness(ctx.getSource(),
                                     com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "value")))))
-                    .executes(ctx -> showBrakingInfo(ctx.getSource())));
+                    .executes(ctx -> showBrakingInfo(ctx.getSource())))
+                .then(Commands.literal("priority")
+                    .requires(src -> src.hasPermission(2))
+                    // /railway priority list
+                    .then(Commands.literal("list")
+                        .executes(ctx -> listPriorities(ctx.getSource())))
+                    // /railway priority set <trainName> <0-5>
+                    .then(Commands.literal("set")
+                        .then(Commands.argument("trainName", StringArgumentType.word())
+                            .then(Commands.argument("level", IntegerArgumentType.integer(0, 5))
+                                .executes(ctx -> setPriority(ctx.getSource(),
+                                        StringArgumentType.getString(ctx, "trainName"),
+                                        IntegerArgumentType.getInteger(ctx, "level"))))))
+                    // /railway priority reset <trainName>
+                    .then(Commands.literal("reset")
+                        .then(Commands.argument("trainName", StringArgumentType.word())
+                            .executes(ctx -> resetPriority(ctx.getSource(),
+                                    StringArgumentType.getString(ctx, "trainName")))))
+                    // /railway priority (без аргументов) = list
+                    .executes(ctx -> listPriorities(ctx.getSource())));
 
         dispatcher.register(railwayCmd);
 
@@ -97,7 +122,7 @@ public class RailwayAICommand {
         );
     }
 
-    // ─── /railway release ───
+// /railway release
     private static int releaseAll(CommandSourceStack source) {
         TrainAIManager manager = TrainAIManager.getInstance();
         if (manager == null) {
@@ -126,7 +151,7 @@ public class RailwayAICommand {
         return 1;
     }
 
-    // ─── /railway log true|false ───
+// /railway log true|false
     private static int toggleLogging(CommandSourceStack source, boolean enabled) {
         RailwayConfig.loggingEnabled = enabled;
         if (enabled) {
@@ -139,7 +164,7 @@ public class RailwayAICommand {
         return 1;
     }
 
-    // ─── /railway safe-mode true|false ───
+// /railway safe-mode true|false
     private static int toggleSafeMode(CommandSourceStack source, boolean enabled) {
         RailwayConfig.safeModeEnabled = enabled;
         if (enabled) {
@@ -152,7 +177,7 @@ public class RailwayAICommand {
         return 1;
     }
 
-    // ─── /railway infinity true|false ───
+// /railway infinity true|false
     private static int toggleInfinity(CommandSourceStack source, boolean enabled) {
         RailwayConfig.infinityMode = enabled;
         int patched = applyInfinityMode(enabled);
@@ -168,13 +193,13 @@ public class RailwayAICommand {
     }
 
     /**
-     * Apply infinity mode — direct access to Create 6.0.9 config:
+     * Apply infinity mode — direct access to Create 6.0.9 config
      *   AllConfigs.server() → CServer
-     *     .trains (CTrains):
+     *     .trains (CTrains)
      *       .maxTrackPlacementLength (ConfigInt, default 32, max 128)
      *       .maxAssemblyLength       (ConfigInt, default 128, max 512)
      *       .maxBogeyCount           (ConfigInt, default 20, max 200)
-     *     .kinetics (CKinetics):
+     *     .kinetics (CKinetics)
      *       — contraption size limits
      *
      * ConfigInt (catnip) wraps ModConfigSpec.IntValue internally.
@@ -377,7 +402,7 @@ public class RailwayAICommand {
         return null;
     }
 
-    // ─── /railway braking ───
+// /railway braking
     private static int showBrakingInfo(CommandSourceStack source) {
         double range = RailwayConfig.obstacleDetectionRange.get();
         double minStop = RailwayConfig.minimumStopDistance.get();
@@ -413,7 +438,7 @@ public class RailwayAICommand {
     }
 
 
-    // ─── /railway (status) ───
+// /railway (status)
     private static int showStatus(CommandSourceStack source) {
         TrainAIManager manager = TrainAIManager.getInstance();
         if (manager == null) {
@@ -473,10 +498,151 @@ public class RailwayAICommand {
         return 1;
     }
 
-    // ─── /railway reload ───
+// /railway reload
     private static int forceReload(CommandSourceStack source) {
         TrainAIManager.initialize();
         source.sendSuccess(() -> Component.literal("§a[Railway AI] Manager re-initialized. Trains will be re-scanned."), true);
         return 1;
+    }
+
+// ---- Priority commands ----
+
+    /**
+     * /railway priority list
+     * Показывает все поезда с их эффективным и статическим приоритетом.
+     */
+    private static int listPriorities(CommandSourceStack source) {
+        TrainAIManager manager = TrainAIManager.getInstance();
+        if (manager == null) {
+            source.sendFailure(Component.literal("§c[Railway AI] Manager not initialized"));
+            return 0;
+        }
+
+        TrainPriorityRegistry reg = TrainPriorityRegistry.getInstance();
+        Collection<TrainAIController> controllers = manager.getAllControllers();
+
+        source.sendSystemMessage(Component.literal("§6§l[Railway Priority] §r§fTracking §a" +
+                controllers.size() + "§f trains:"));
+
+        boolean anyNonDefault = false;
+        for (TrainAIController ctrl : controllers) {
+            UUID trainId = ctrl.getTrainId();
+            TrainPriorityLevel staticP    = reg.getStaticPriority(trainId);
+            TrainPriorityLevel effectiveP = reg.getEffectivePriority(trainId);
+            int agingTicks = reg.getAgingTicks(trainId);
+            String name = ctrl.getTrainDisplayName();
+            if (name == null || name.isBlank()) name = trainId.toString().substring(0, 8);
+
+            String agingStr = agingTicks > 0
+                ? " §7(aging: §e" + agingTicks + "t§7" + (reg.hasAgingBoost(trainId) ? " §a+1!" : "") + ")"
+                : "";
+            String priorityColor = switch (effectiveP) {
+                case NORMAL   -> "§f";
+                case LOW      -> "§7";
+                case MEDIUM   -> "§a";
+                case HIGH     -> "§b";
+                case VERY_HIGH -> "§d";
+                case MAXIMUM  -> "§6";
+                case PLAYER   -> "§e";
+            };
+            String changeMarker = (effectiveP != staticP) ? " §e[boosted]" : "";
+
+            source.sendSystemMessage(Component.literal(
+                    "  §e" + name + " §f| " + priorityColor + effectiveP.name() + "(" + effectiveP.value + ")" +
+                    changeMarker + agingStr));
+            if (staticP != TrainPriorityLevel.NORMAL) anyNonDefault = true;
+        }
+
+        if (!anyNonDefault) {
+            source.sendSystemMessage(Component.literal(
+                    "§7  All trains are at NORMAL priority. Use §f/railway priority set <name> <0-5>§7 to change."));
+        }
+        source.sendSystemMessage(Component.literal(
+                "§7  Usage: §f/railway priority set <trainName> <0-5>"));
+        source.sendSystemMessage(Component.literal(
+                "§7  Levels: §f0§7=NORMAL §f1§7=LOW §f2§7=MEDIUM §f3§7=HIGH §f4§7=VERY_HIGH §f5§7=MAXIMUM"));
+        return 1;
+    }
+
+    /**
+     * /railway priority set <trainName> <0-5>
+     * Устанавливает уровень приоритета поезда по имени (частичное совпадение).
+     */
+    private static int setPriority(CommandSourceStack source, String trainName, int level) {
+        TrainAIManager manager = TrainAIManager.getInstance();
+        if (manager == null) {
+            source.sendFailure(Component.literal("§c[Railway AI] Manager not initialized"));
+            return 0;
+        }
+
+        TrainAIController found = findTrainByName(manager, trainName);
+        if (found == null) {
+            source.sendFailure(Component.literal(
+                    "§c[Railway AI] Train not found: §f" + trainName +
+                    "§c. Use §f/railway§c to see train IDs."));
+            return 0;
+        }
+
+        TrainPriorityLevel newLevel = TrainPriorityLevel.fromValue(level);
+        TrainPriorityRegistry.getInstance().setPriority(found.getTrainId(), newLevel);
+
+        String name = found.getTrainDisplayName();
+        if (name == null || name.isBlank()) name = found.getTrainId().toString().substring(0, 8);
+        final String displayName = name;
+        final TrainPriorityLevel finalLevel = newLevel;
+
+        source.sendSuccess(() -> Component.literal(
+                "§a[Railway Priority] §f" + displayName + " §7→ §6" + finalLevel.name() + "(" + finalLevel.value + ")"), true);
+        return 1;
+    }
+
+    /**
+     * /railway priority reset <trainName>
+     * Сбрасывает приоритет поезда к NORMAL(0).
+     */
+    private static int resetPriority(CommandSourceStack source, String trainName) {
+        TrainAIManager manager = TrainAIManager.getInstance();
+        if (manager == null) {
+            source.sendFailure(Component.literal("§c[Railway AI] Manager not initialized"));
+            return 0;
+        }
+
+        TrainAIController found = findTrainByName(manager, trainName);
+        if (found == null) {
+            source.sendFailure(Component.literal(
+                    "§c[Railway AI] Train not found: §f" + trainName));
+            return 0;
+        }
+
+        TrainPriorityRegistry.getInstance().setPriority(found.getTrainId(), TrainPriorityLevel.NORMAL);
+
+        String name = found.getTrainDisplayName();
+        if (name == null || name.isBlank()) name = found.getTrainId().toString().substring(0, 8);
+        final String displayName = name;
+
+        source.sendSuccess(() -> Component.literal(
+                "§a[Railway Priority] §f" + displayName + " §7reset to §fNORMAL(0)"), true);
+        return 1;
+    }
+
+    /**
+     * Найти TrainAIController по имени или частичному UUID.
+     * Сначала ищет по отображаемому имени поезда, затем по UUID.
+     */
+    private static TrainAIController findTrainByName(TrainAIManager manager, String nameOrId) {
+        String lower = nameOrId.toLowerCase();
+
+        for (TrainAIController ctrl : manager.getAllControllers()) {
+            // Точное совпадение UUID
+            if (ctrl.getTrainId().toString().startsWith(lower)) {
+                return ctrl;
+            }
+            // Совпадение по имени (частичное, игнорируя регистр)
+            String displayName = ctrl.getTrainDisplayName();
+            if (displayName != null && displayName.toLowerCase().contains(lower)) {
+                return ctrl;
+            }
+        }
+        return null;
     }
 }

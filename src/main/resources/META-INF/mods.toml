@@ -8,7 +8,7 @@ license="All Rights Reserved"
 # ==============================================================
 [[mods]]
 modId="create_railway"
-version="1.0.8"
+version="1.0"
 displayName="Create: Railway Evolution Vanilla Edition"
 logoFile="logo.png"
 authors="Fizzy_lovely"
@@ -50,13 +50,13 @@ I can't do everything at once, so please be patient and understanding. Thank you
 [[dependencies.create_railway]]
     modId="minecraft"
     mandatory=true
-    versionRange="[1.20.1]"
+    versionRange="[1.20.1,1.21)"
     ordering="NONE"
     side="BOTH"
 
 [[dependencies.create_railway]]
     modId="create"
-    mandatory=true
+    mandatory=false
     versionRange="[0.5.1,)"
     ordering="AFTER"
     side="BOTH"

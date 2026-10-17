@@ -12,23 +12,22 @@ import java.util.UUID;
 /**
  * PlayerTrainHandle — адаптер для поезда под управлением игрока.
  *
- * Делает поезд игрока равноправным участником экосистемы трафика:
+ * Делает поезд игрока равноправным участником экосистемы трафика
  * PerceptionEngine видит его через тот же ITrainHandle интерфейс,
  * что и AI-поезда. ObstacleProfile.leaderIsPlayer=true сигнализирует
  * SafetyManager о повышенной реакции.
  *
- * Ключевые свойства:
+ * Ключевые свойства
  *   - setSpeed/setThrottle/forceStop/cancelNavigation → NO-OP.
  *     Нельзя переопределять волю игрока.
  *   - isPlayerControlled() → всегда true.
  *   - Скорость читается из базового AI-хэндла через делегирование.
  *     Не нужен второй VarHandle — данные уже прочитаны.
  *
- * Жизненный цикл:
+ * Жизненный цикл
  *   Создаётся TrainAIManager.scanForTrains() когда detectPlayerRiding()
  *   возвращает игрока для данного поезда. Сохраняется пока игрок в кабине.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class PlayerTrainHandle implements ITrainHandle {
 
@@ -46,7 +45,6 @@ public final class PlayerTrainHandle implements ITrainHandle {
     @Nullable
     private final ServerPlayer player;
 
-    // ──────────────────────────────────────────────────────────────────────
 
     public PlayerTrainHandle(ITrainHandle delegate, UUID playerUUID,
                              @Nullable ServerPlayer player) {
@@ -55,28 +53,28 @@ public final class PlayerTrainHandle implements ITrainHandle {
         this.player     = player;
     }
 
-    // ─── Идентификация ────────────────────────────────────────────────────
+// Идентификация
 
     @Override public UUID   getId()          { return delegate.getId(); }
     @Override public String getDisplayName() {
         return delegate.getDisplayName() + " [" + getPlayerName() + "]";
     }
 
-    // ─── Кинематика (READ-ONLY делегирование) ─────────────────────────────
+// Кинематика (READ-ONLY делегирование)
 
     @Override public double getSpeed()        { return delegate.getSpeed(); }
     @Override public double getMaxSpeed()     { return delegate.getMaxSpeed(); }
     @Override public double getAcceleration() { return delegate.getAcceleration(); }
     @Override public double getThrottle()     { return delegate.getThrottle(); }
 
-    // ─── Команды → NO-OP (нельзя управлять поездом игрока) ───────────────
+// Команды → NO-OP (нельзя управлять поездом игрока)
 
     /**
      * NO-OP. Скорость поезда игрока устанавливает сам игрок.
      * SafetyManager может вызвать этот метод при overlap/derail,
      * но мы намеренно игнорируем — это ответственность самого игрока.
      *
-     * Единственное исключение: если нужно ПРЕДУПРЕДИТЬ игрока —
+     * Единственное исключение: если нужно ПРЕДУПРЕДИТЬ игрока
      * это делается через отдельный канал (звук, чат), не через setSpeed.
      */
     @Override public void setSpeed(double speed)       { /* NO-OP */ }
@@ -86,16 +84,25 @@ public final class PlayerTrainHandle implements ITrainHandle {
     @Override public void resumeNavigation()           { /* NO-OP */ }
     @Override public void cancelNavigation()           { /* NO-OP */ }
 
-    // ─── Статус ───────────────────────────────────────────────────────────
+// Статус
 
     @Override public boolean isDerailed()        { return delegate.isDerailed(); }
     @Override public boolean isBlocked()         { return false; } // игрок сам видит
     @Override public boolean isPlayerControlled(){ return true; } // всегда true
 
+    /**
+     * Игрок всегда имеет абсолютный приоритет PLAYER (выше уровня 5).
+     * Не читает TrainPriorityRegistry — игрок не может потерять приоритет из-за aging.
+     */
+    @Override
+    public com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel getPriority() {
+        return com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel.PLAYER;
+    }
+
     @Override
     public @Nullable UUID getControllingPlayerUUID() { return playerUUID; }
 
-    // ─── Навигация ────────────────────────────────────────────────────────
+// Навигация
 
     /**
      * Для поезда игрока возвращаем оставшееся расстояние из базового хэндла
@@ -108,7 +115,7 @@ public final class PlayerTrainHandle implements ITrainHandle {
     @Override public boolean isWaitingForSignal()      { return false; }
     @Override public double  getDistanceToSignal()     { return Double.MAX_VALUE; }
 
-    // ─── Граф и позиция ───────────────────────────────────────────────────
+// Граф и позиция
 
     @Override public boolean isOnGraph() { return delegate.isOnGraph(); }
 
@@ -126,9 +133,15 @@ public final class PlayerTrainHandle implements ITrainHandle {
     @Override public @Nullable Object getLeadingNode2Ref() { return delegate.getLeadingNode2Ref(); }
     @Override public double           getLeadingEdgePosition() { return delegate.getLeadingEdgePosition(); }
 
+    // Trailing edge delegation
+    @Override public @Nullable Object getTrailingEdgeRef()  { return delegate.getTrailingEdgeRef(); }
+    @Override public @Nullable Object getTrailingNode1Ref() { return delegate.getTrailingNode1Ref(); }
+    @Override public @Nullable Object getTrailingNode2Ref() { return delegate.getTrailingNode2Ref(); }
+    @Override public double           getTrailingEdgePosition() { return delegate.getTrailingEdgePosition(); }
+
     @Override public List<UUID> getOccupiedSignalGroups() { return delegate.getOccupiedSignalGroups(); }
 
-    // ─── Вспомогательные ──────────────────────────────────────────────────
+// Вспомогательные
 
     /** Ссылка на ServerPlayer для оповещений (null если игрок отключился). */
     @Nullable public ServerPlayer getPlayer() { return player; }

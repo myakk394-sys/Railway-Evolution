@@ -7,7 +7,6 @@ import java.util.List;
 /**
  * ITrackEdge — абстракция ребра путевого графа.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public interface ITrackEdge {
 

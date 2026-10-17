@@ -3,7 +3,6 @@ package com.fizzylovely.railwayevolution.ai.core;
 /**
  * IGraphEdgeEntry — пара (соседний узел, ребро) из ITrainGraph.getEdgesFrom().
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public interface IGraphEdgeEntry {
 

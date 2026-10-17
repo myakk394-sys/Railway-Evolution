@@ -4,25 +4,28 @@ import com.fizzylovely.railwayevolution.CreateRailwayMod;
 import com.fizzylovely.railwayevolution.ai.TrainAIManager;
 import com.fizzylovely.railwayevolution.command.RailwayAICommand;
 import net.minecraft.server.level.ServerLevel;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import net.neoforged.neoforge.event.server.ServerStoppedEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.minecraftforge.event.RegisterCommandsEvent;
+import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.server.ServerStoppedEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
 
 /**
- * NeoForge event handler — hooks into the server tick to drive the AI system.
+ * Forge 1.20.1 event handler — hooks into the server tick to drive the AI system.
  */
 public class TrainEventHandler {
 
     @SubscribeEvent
-    public void onServerTickEnd(ServerTickEvent.Post event) {
+    public void onServerTickEnd(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) return;
+
         TrainAIManager manager = TrainAIManager.getInstance();
         if (manager == null) return;
 
-        ServerLevel overworld = event.getServer().overworld();
-        long currentTick = overworld.getGameTime();
+        ServerLevel fallbackLevel = event.getServer().overworld();
+        if (fallbackLevel == null) return;
+        long currentTick = fallbackLevel.getGameTime();
 
-        manager.tick(overworld, currentTick);
+        manager.tick(fallbackLevel, currentTick);
     }
 
     @SubscribeEvent

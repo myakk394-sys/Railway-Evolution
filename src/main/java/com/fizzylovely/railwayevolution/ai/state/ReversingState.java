@@ -7,12 +7,11 @@ import org.jetbrains.annotations.Nullable;
 /**
  * ReversingState — реверсный манёвр: откат назад для разблокировки тупика.
  *
- * Стратегия:
+ * Стратегия
  *   1. Откатываемся на reverseDistance блоков назад.
  *   2. После отката — отменяем навигацию (Create перепроложит маршрут).
  *   3. Если за спиной появился поезд — прерываем откат, возврат в YIELDING.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class ReversingState implements TrainControlState {
 

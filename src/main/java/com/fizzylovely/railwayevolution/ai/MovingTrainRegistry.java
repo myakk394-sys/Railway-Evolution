@@ -13,11 +13,11 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Global registry of all MOVING trains — complements StoppedTrainRegistry.
  *
- * Together they cover ALL trains:
+ * Together they cover ALL trains
  * - StoppedTrainRegistry: speed < 0.02 or derailed
  * - MovingTrainRegistry:  speed >= 0.02 and not derailed
  *
- * Why needed:
+ * Why needed
  * - BFS graph walk misses trains during edge transitions (TravellingPoint updates lag)
  * - Beam scan misses trains on curves (heading doesn't follow track geometry)
  * - This registry provides a pure position+velocity fallback that works regardless
@@ -27,30 +27,42 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * Thread-safe via ConcurrentHashMap.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public class MovingTrainRegistry {
 
     private static final MovingTrainRegistry INSTANCE = new MovingTrainRegistry();
 
     /**
-     * Snapshot of a moving train's state, updated every tick.
+     * Reused entry updated in place while a train remains moving.
      */
     public static class MovingTrain {
         public final UUID trainId;
-        public final Vec3 precisePosition;
-        public final BlockPos blockPosition;
-        public final int trainLength;
-        public final double headingX;        // normalized heading
-        public final double headingZ;
-        public final double speed;           // blocks/tick
-        public final Object graphRef;        // Train.graph for same-network filtering
-        public final long lastUpdateTick;    // tick when this entry was last updated
+        public Vec3 precisePosition;
+        public BlockPos blockPosition;
+        public int trainLength;
+        public double headingX;        // normalized heading
+        public double headingZ;
+        public double speed;           // blocks/tick
+        public Object graphRef;        // Train.graph for same-network filtering
+        public long lastUpdateTick;    // tick when this entry was last updated
 
         public MovingTrain(UUID trainId, Vec3 precisePosition, BlockPos blockPosition,
                            int trainLength, double headingX, double headingZ,
                            double speed, Object graphRef, long lastUpdateTick) {
             this.trainId = trainId;
+            this.precisePosition = precisePosition;
+            this.blockPosition = blockPosition;
+            this.trainLength = trainLength;
+            this.headingX = headingX;
+            this.headingZ = headingZ;
+            this.speed = speed;
+            this.graphRef = graphRef;
+            this.lastUpdateTick = lastUpdateTick;
+        }
+
+        void update(Vec3 precisePosition, BlockPos blockPosition, int trainLength,
+                    double headingX, double headingZ, double speed,
+                    Object graphRef, long lastUpdateTick) {
             this.precisePosition = precisePosition;
             this.blockPosition = blockPosition;
             this.trainLength = trainLength;
@@ -74,6 +86,18 @@ public class MovingTrainRegistry {
         }
     }
 
+    /** distance comparator — reused across getNearby() calls. */
+    private static final class DistanceComparator implements java.util.Comparator<MovingTrain> {
+        Vec3 origin;
+        @Override
+        public int compare(MovingTrain a, MovingTrain b) {
+            Vec3 pa = a.precisePosition != null ? a.precisePosition : Vec3.atCenterOf(a.blockPosition);
+            Vec3 pb = b.precisePosition != null ? b.precisePosition : Vec3.atCenterOf(b.blockPosition);
+            return Double.compare(origin.distanceToSqr(pa), origin.distanceToSqr(pb));
+        }
+    }
+    private static final DistanceComparator DIST_CMP = new DistanceComparator();
+
     private final ConcurrentHashMap<UUID, MovingTrain> registry = new ConcurrentHashMap<>();
 
     public static MovingTrainRegistry getInstance() {
@@ -95,10 +119,16 @@ public class MovingTrainRegistry {
 
         if (speed >= 0.02 && !derailed) {
             // Train is moving → register/update
-            registry.put(trainId, new MovingTrain(
-                    trainId, precisePosition, blockPosition,
-                    trainLength, headingX, headingZ,
-                    speed, graphRef, currentTick));
+            MovingTrain existing = registry.get(trainId);
+            if (existing == null) {
+                registry.put(trainId, new MovingTrain(
+                        trainId, precisePosition, blockPosition,
+                        trainLength, headingX, headingZ,
+                        speed, graphRef, currentTick));
+            } else {
+                existing.update(precisePosition, blockPosition, trainLength,
+                        headingX, headingZ, speed, graphRef, currentTick);
+            }
         } else {
             // Train stopped or crashed → remove from moving registry
             registry.remove(trainId);
@@ -147,12 +177,9 @@ public class MovingTrainRegistry {
             }
         }
 
-        // Sort nearest first
-        result.sort((a, b) -> {
-            Vec3 pa = a.precisePosition != null ? a.precisePosition : Vec3.atCenterOf(a.blockPosition);
-            Vec3 pb = b.precisePosition != null ? b.precisePosition : Vec3.atCenterOf(b.blockPosition);
-            return Double.compare(position.distanceToSqr(pa), position.distanceToSqr(pb));
-        });
+        // Sort nearest first — static comparator
+        DIST_CMP.origin = position;
+        result.sort(DIST_CMP);
 
         return result;
     }

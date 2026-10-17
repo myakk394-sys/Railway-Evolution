@@ -10,7 +10,6 @@ import org.jetbrains.annotations.Nullable;
  * Только последний поезд в колонне (spaceAvailableBehind=true) может
  * начать откат для разрешения пробки. Остальные просто ждут.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class TrafficJamState implements TrainControlState {
 

@@ -7,14 +7,13 @@ import org.jetbrains.annotations.Nullable;
 /**
  * YieldingState — уступка дороги: поезд остановлен, ожидает очистки пути.
  *
- * Переходы:
+ * Переходы
  *   → CRUISING           если путь очистился
  *   → FLOW_FOLLOWER      если появился подходящий попутный поезд
  *   → WAIT_FOR_CLEARANCE если препятствие в критической зоне
  *   → REVERSING          если тайм-аут (maxYieldTicks), есть место сзади
  *   → TRAFFIC_JAM        если зажаты
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class YieldingState implements TrainControlState {
 
@@ -54,9 +53,28 @@ public final class YieldingState implements TrainControlState {
         // Критическая зона
         if (obs.isOverlapping) return TrainStateId.WAIT_FOR_CLEARANCE;
 
-        // Тайм-аут: слишком долго ждём → откат
+        // Aging: накапливаем тики ожидания для starvation prevention
+        if (ctx.selfHandle != null) {
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry
+                .getInstance().incrementAging(ctx.selfHandle.getId());
+        }
+
+        // Тайм-аут: эскалируем в REVERSING если слишком долго ждём
+        // Priority-aware: при большой разнице приоритетов ждём дольше (меньше ненужных разворотов)
         long waitedTicks = ctx.currentTick - yieldStartTick;
-        if (waitedTicks > MAX_YIELD_TICKS && ctx.spaceAvailableBehind) {
+        long effectiveMax = MAX_YIELD_TICKS;
+
+        com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel myP  = ctx.selfPriority;
+        com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel obsP = obs.obstaclePriority;
+        if (myP != null && obsP != null && myP.shouldYieldTo(obsP)) {
+            int delta = obsP.value - myP.value;
+            if (delta >= 2) {
+                // Большая разница → ждём в 1.5x дольше (уступаем более охотно)
+                effectiveMax = (long)(MAX_YIELD_TICKS * 1.5);
+            }
+        }
+
+        if (waitedTicks > effectiveMax && ctx.spaceAvailableBehind) {
             return TrainStateId.REVERSING;
         }
 

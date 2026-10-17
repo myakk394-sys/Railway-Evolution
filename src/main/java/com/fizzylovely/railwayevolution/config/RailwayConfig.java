@@ -1,6 +1,6 @@
 package com.fizzylovely.railwayevolution.config;
 
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 
 /**
  * Mod configuration — tunable parameters for the Train AI system.
@@ -10,7 +10,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  */
 public class RailwayConfig {
 
-    // ─── Runtime toggles (changed via /railway command, not persisted to TOML) ───
+    // Runtime toggles (changed via /railway command, not persisted to TOML)
     /** When false, all AI log messages (info/debug/warn) are suppressed. Default: OFF. */
     public static volatile boolean loggingEnabled = false;
     /** When true, trains detect and brake for players on tracks. Default: ON. */
@@ -21,37 +21,37 @@ public class RailwayConfig {
      */
     public static volatile boolean infinityMode = false;
 
-    public static final ModConfigSpec SPEC;
+    public static final ForgeConfigSpec SPEC;
 
-    // ─── Obstacle Detection ───
-    public static final ModConfigSpec.DoubleValue obstacleDetectionRange;
+    // Obstacle Detection
+    public static final ForgeConfigSpec.DoubleValue obstacleDetectionRange;
 
-    // ─── Virtual Block System (VBS) ───
-    public static final ModConfigSpec.LongValue reservationTTLTicks;
-    public static final ModConfigSpec.IntValue maxLookaheadSegments;
-    public static final ModConfigSpec.IntValue vbsCleanupIntervalTicks;
+    // Virtual Block System (VBS)
+    public static final ForgeConfigSpec.LongValue reservationTTLTicks;
+    public static final ForgeConfigSpec.IntValue maxLookaheadSegments;
+    public static final ForgeConfigSpec.IntValue vbsCleanupIntervalTicks;
 
-    // ─── Right-of-Way ───
-    public static final ModConfigSpec.DoubleValue minimumStopDistance;
-    public static final ModConfigSpec.LongValue maxYieldTicks;
+    // Right-of-Way
+    public static final ForgeConfigSpec.DoubleValue minimumStopDistance;
+    public static final ForgeConfigSpec.LongValue maxYieldTicks;
 
-    // ─── Reverse Maneuver ───
-    public static final ModConfigSpec.BooleanValue reverseManeuverEnabled;
-    public static final ModConfigSpec.DoubleValue reverseBackupDistance;
-    public static final ModConfigSpec.DoubleValue reverseSpeed;
+    // Reverse Maneuver
+    public static final ForgeConfigSpec.BooleanValue reverseManeuverEnabled;
+    public static final ForgeConfigSpec.DoubleValue reverseBackupDistance;
+    public static final ForgeConfigSpec.DoubleValue reverseSpeed;
 
-    // ─── Manager ───
-    public static final ModConfigSpec.IntValue trainScanIntervalTicks;
+    // Manager
+    public static final ForgeConfigSpec.IntValue trainScanIntervalTicks;
 
-    // ─── Player Safety System ───
-    public static final ModConfigSpec.BooleanValue playerSafetyEnabled;
-    public static final ModConfigSpec.DoubleValue playerDetectionRange;
-    public static final ModConfigSpec.DoubleValue playerEmergencyStopDistance;
-    public static final ModConfigSpec.DoubleValue playerSafeDistanceFromRail;
-    public static final ModConfigSpec.IntValue playerWhistleWarningTicks;
+    // Player Safety System
+    public static final ForgeConfigSpec.BooleanValue playerSafetyEnabled;
+    public static final ForgeConfigSpec.DoubleValue playerDetectionRange;
+    public static final ForgeConfigSpec.DoubleValue playerEmergencyStopDistance;
+    public static final ForgeConfigSpec.DoubleValue playerSafeDistanceFromRail;
+    public static final ForgeConfigSpec.IntValue playerWhistleWarningTicks;
 
     static {
-        ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
+        ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
 
         builder.comment("Create: Railway Evolution — Train AI Configuration (Vanilla Edition)");
         builder.push("obstacle_detection");

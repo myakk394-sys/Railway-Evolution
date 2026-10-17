@@ -1,5 +1,7 @@
 package com.fizzylovely.railwayevolution.ai.core;
 
+import com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel;
+import com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
@@ -12,7 +14,7 @@ import java.util.UUID;
  * Ядро (PerceptionEngine, StateMachine, SafetyManager) НИКОГДА не импортирует
  * классы Create напрямую. Всё взаимодействие — через этот интерфейс.
  *
- * Реализации:
+ * Реализации
  *   - {@link com.fizzylovely.railwayevolution.ai.adapter.Create1211TrainHandle}
  *     для обычных поездов Create (AI + безнадзорные).
  *   - {@link com.fizzylovely.railwayevolution.ai.adapter.PlayerTrainHandle}
@@ -21,13 +23,11 @@ import java.util.UUID;
  * Все методы вызываются только с серверного потока.
  * Реализации должны быть потокобезопасны для read-only доступа.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public interface ITrainHandle {
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Идентификация
-    // ─────────────────────────────────────────────────────────────────────────
 
     /** UUID поезда (совпадает с Create's Train.id). */
     UUID getId();
@@ -35,9 +35,8 @@ public interface ITrainHandle {
     /** Отображаемое имя поезда (для отладки/UI). */
     String getDisplayName();
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Кинематика
-    // ─────────────────────────────────────────────────────────────────────────
 
     /**
      * Текущая скорость в блоках/тик. Знак: + = вперёд по оси навигации.
@@ -66,9 +65,8 @@ public interface ITrainHandle {
     /** Установить дроссель. No-op для PlayerTrainHandle. */
     void setThrottle(double throttle);
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Статус
-    // ─────────────────────────────────────────────────────────────────────────
 
     /** Поезд сошёл с рельс (derailed). */
     boolean isDerailed();
@@ -93,9 +91,8 @@ public interface ITrainHandle {
     @Nullable
     UUID getControllingPlayerUUID();
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Навигация
-    // ─────────────────────────────────────────────────────────────────────────
 
     /** Расстояние до конечной точки маршрута (блоки). 0 если нет маршрута. */
     double getDistanceToDestination();
@@ -112,9 +109,8 @@ public interface ITrainHandle {
     /** Расстояние до блокирующего сигнала (блоки). Double.MAX_VALUE если нет. */
     double getDistanceToSignal();
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Граф и позиция
-    // ─────────────────────────────────────────────────────────────────────────
 
     /** Поезд находится на TrackGraph (не в процессе миграции). */
     boolean isOnGraph();
@@ -179,15 +175,40 @@ public interface ITrainHandle {
      */
     double getLeadingEdgePosition();
 
+    // Trailing carriage graph data for PerceptionEngine
+
+    /**
+     * Идентификатор хвостового ребра (object identity).
+     * {@code null} если нет данных или одновагонный состав.
+     */
+    @Nullable
+    Object getTrailingEdgeRef();
+
+    /**
+     * Узел node1 хвостовой TravellingPoint.
+     */
+    @Nullable
+    Object getTrailingNode1Ref();
+
+    /**
+     * Узел node2 хвостовой TravellingPoint.
+     */
+    @Nullable
+    Object getTrailingNode2Ref();
+
+    /**
+     * Позиция на хвостовом ребре (0..edgeLength).
+     */
+    double getTrailingEdgePosition();
+
     /**
      * UUID занятых signal groups (для isOnSameTrack проверки).
      * Возвращает пустой список если нет данных.
      */
     List<UUID> getOccupiedSignalGroups();
 
-    // ─────────────────────────────────────────────────────────────────────────
+
     // Управляющие команды (только для AI-поездов)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /**
      * Пробудить навигацию Create (снять паузу ScheduleRuntime).
@@ -202,7 +223,7 @@ public interface ITrainHandle {
     void cancelNavigation();
 
     /**
-     * Полная аварийная остановка:
+     * Полная аварийная остановка
      * throttle=0, speed=0, targetSpeed=0.
      * No-op для PlayerTrainHandle.
      */
@@ -213,4 +234,24 @@ public interface ITrainHandle {
      * No-op для PlayerTrainHandle.
      */
     void restoreFullThrottle();
+
+
+    // Приоритет
+
+    /**
+     * Эффективный уровень приоритета поезда.
+     *
+     * Default-реализация читает из TrainPriorityRegistry (учитывает aging-бонус).
+     * PlayerTrainHandle переопределяет на TrainPriorityLevel.PLAYER.
+     *
+     * Приоритет влияет на:
+     *   - junction reservation (кто получает проход первым)
+     *   - решение об уступке (yield decision в AnalyzingObstacleState)
+     *   - aging-механику starvation prevention
+     *
+     * Безопасность: приоритет НИКОГДА не отменяет safety checks SafetyManager.
+     */
+    default TrainPriorityLevel getPriority() {
+        return TrainPriorityRegistry.getInstance().getEffectivePriority(getId());
+    }
 }

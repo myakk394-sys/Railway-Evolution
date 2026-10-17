@@ -1,5 +1,6 @@
 package com.fizzylovely.railwayevolution.ai.core;
 
+import com.fizzylovely.railwayevolution.ai.priority.TrainPriorityLevel;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
@@ -15,45 +16,44 @@ import java.util.UUID;
  * Заполняется в TrainAIController.tick() из ITrainHandle перед вызовом StateMachine.
  * Читается состояниями State Machine и PerceptionEngine (read-only).
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class TrainControlContext {
 
-    // ─── Временна́я метка ──────────────────────────────────────────────────
+// Временна́я метка
     public long        currentTick;
     public ServerLevel level;
 
-    // ─── Ссылка на наш хэндл (только для вызова команд — setSpeed и т.п.) ─
+// Ссылка на наш хэндл (только для вызова команд — setSpeed и т.п.)
     public ITrainHandle selfHandle;
 
-    // ─── Кинематика ───────────────────────────────────────────────────────
+// Кинематика
     public double speed;              // текущая скорость (б/тик), + = вперёд
     public double maxSpeed;           // максимально допустимая
     public double acceleration;       // ускорение/торможение (б/тик²)
 
-    // ─── Навигация ────────────────────────────────────────────────────────
+// Навигация
     public double  distToDestination; // 0 если нет маршрута
     public boolean hasDestination;
     public boolean createWaitingForSignal;
     public double  createDistToSignal;
 
-    // ─── Граф ─────────────────────────────────────────────────────────────
+// Граф
     public boolean onGraph;
     public boolean derailed;
     public boolean blocked;           // конец пути
 
-    // ─── Управление ───────────────────────────────────────────────────────
+// Управление
     public boolean playerControlled;
     @Nullable public UUID playerUUID; // null если нет игрока
 
-    // ─── Позиция и вектор движения ────────────────────────────────────────
+// Позиция и вектор движения
     @Nullable public Vec3 leadingPosition;   // позиция головы поезда
     @Nullable public Vec3 trailingPosition;  // позиция хвоста
     public double headingX;                  // нормализованный вектор движения (XZ)
     public double headingZ;
     public boolean headingValid;             // true если вектор надёжен
 
-    // ─── Результаты PerceptionEngine ─────────────────────────────────────
+// Результаты PerceptionEngine
 
     /**
      * Обнаруженное препятствие. null = путь свободен.
@@ -73,16 +73,16 @@ public final class TrainControlContext {
      */
     public boolean sandwiched;
 
-    // ─── Состояние перекрёстка ────────────────────────────────────────────
+// Состояние перекрёстка
     public boolean junctionBlocked;    // перекрёсток занят
     public boolean junctionHasSpace;   // достаточно места за перекрёстком
     @Nullable public UUID junctionYieldToId;  // UUID поезда которому уступаем
 
-    // ─── Вспомогательные флаги ────────────────────────────────────────────
+// Вспомогательные флаги
     public boolean graphScanRan;       // BFS выполнился с реальными данными
     public boolean isWrongWay;         // едем против нормального направления ребра
 
-    // ─── FLOW_FOLLOWER данные ─────────────────────────────────────────────
+// FLOW_FOLLOWER данные
     /**
      * true если обнаруженный поезд едет В ТОМ ЖЕ направлении что и мы,
      * и его скорость ≥ нашей → можем "ехать в потоке" вместо полного останова.
@@ -101,10 +101,24 @@ public final class TrainControlContext {
      */
     public boolean flowLeaderIsPlayer;
 
-    // ─── Константы ────────────────────────────────────────────────────────
+// Приоритет
+    /**
+     * Эффективный приоритет нашего поезда за этот тик.
+     * Заполняется из ITrainHandle.getPriority() в fillFrom().
+     * Используется в AnalyzingObstacleState и YieldingState для yield-решений.
+     */
+    public TrainPriorityLevel selfPriority;
+
+    /**
+     * Эффективный приоритет обнаруженного препятствия.
+     * Заполняется PerceptionEngine из ObstacleProfile.obstaclePriority.
+     * null если нет препятствия.
+     */
+    public TrainPriorityLevel obstaclePriority;
+
+// Константы
     public static final double JAM_FORWARD_THRESHOLD = 15.0; // блоки
 
-    // ──────────────────────────────────────────────────────────────────────
 
     /**
      * Сброс в начало тика. Вызывается TrainAIController ДО заполнения.
@@ -151,6 +165,9 @@ public final class TrainControlContext {
         obstacleIsFlowCandidate = false;
         flowLeaderSpeed = 0;
         flowLeaderIsPlayer = false;
+
+        selfPriority     = TrainPriorityLevel.NORMAL;
+        obstaclePriority = TrainPriorityLevel.NORMAL;
     }
 
     /**
@@ -174,5 +191,6 @@ public final class TrainControlContext {
         this.playerUUID      = handle.getControllingPlayerUUID();
         this.leadingPosition = handle.getLeadingPosition();
         this.trailingPosition= handle.getTrailingPosition();
+        this.selfPriority    = handle.getPriority();
     }
 }

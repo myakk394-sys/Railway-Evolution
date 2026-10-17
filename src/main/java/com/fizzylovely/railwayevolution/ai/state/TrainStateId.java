@@ -7,7 +7,6 @@ package com.fizzylovely.railwayevolution.ai.state;
  * и реализации (TrainControlState). Позволяет добавлять новые состояния
  * без изменения перечисления.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public enum TrainStateId {
 
@@ -34,6 +33,9 @@ public enum TrainStateId {
 
     /** Пробка: зажаты спереди и сзади, ждём разрешения. */
     TRAFFIC_JAM,
+
+    /** Остановлен/на станции без активного назначения. */
+    STOPPED,
 
     /**
      * Управление игрока: AI полностью уступает контроль.

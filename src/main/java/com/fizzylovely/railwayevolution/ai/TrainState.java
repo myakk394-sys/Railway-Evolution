@@ -3,7 +3,7 @@ package com.fizzylovely.railwayevolution.ai;
 /**
  * Finite State Machine states for a train's AI controller.
  *
- * State transitions (Decision Tree):
+ * State transitions (Decision Tree)
  *   CRUISING -> ANALYZING_OBSTACLE   (obstacle detected ahead)
  *   ANALYZING_OBSTACLE -> CRUISING   (obstacle cleared or false alarm)
  *   ANALYZING_OBSTACLE -> BYPASSING  (oncoming track is free, switches found)
@@ -24,7 +24,7 @@ public enum TrainState {
     CRUISING,
 
     /**
-     * An obstacle has been detected. The train decelerates and evaluates:
+     * An obstacle has been detected. The train decelerates and evaluates
      *  - Is the obstacle a stopped/broken train?
      *  - Is there a slower train ahead?
      *  - Is it a deadlock situation?
@@ -41,7 +41,7 @@ public enum TrainState {
 
     /**
      * The train has stopped and is yielding right-of-way.
-     * This happens when:
+     * This happens when
      *  - An oncoming train is detected while bypassing
      *  - The train is waiting for a higher-priority train to pass
      *  - Waiting in a pocket/siding for clearance

@@ -8,16 +8,15 @@ import org.jetbrains.annotations.Nullable;
 /**
  * PlayerOverrideState — управление игрока: AI полностью уступает.
  *
- * Экосистемная роль:
- *   - Поезд игрока остаётся полноправным участником трафика:
+ * Экосистемная роль
+ *   - Поезд игрока остаётся полноправным участником трафика
  *     другие AI-поезда «видят» его через PerceptionEngine и реагируют.
- *   - SafetyManager продолжает работать ТОЛЬКО для крайних случаев:
+ *   - SafetyManager продолжает работать ТОЛЬКО для крайних случаев
  *     физическое перекрытие или сход с рельс блокируются даже для игрока.
  *   - Все AI-блокировки освобождаются при входе в это состояние.
  *
  * Переход назад в CRUISING: при потере управления игроком (playerControlled=false).
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class PlayerOverrideState implements TrainControlState {
 

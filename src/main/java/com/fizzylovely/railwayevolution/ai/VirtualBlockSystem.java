@@ -8,36 +8,36 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Virtual Block System (VBS) — Dynamic Track Segment Reservation Manager.
- *
- * Принцип работы / How it works:
- * ─────────────────────────────
- * The VBS divides the railway into virtual "blocks" (segments between nodes/switches).
- * Each train reserves N segments ahead of itself (look-ahead distance).
- * A segment can only be reserved by ONE train at a time (exclusive lock).
- *
- * Reservation rules:
- *   1. A train requests reservation of segments along its planned path.
- *   2. If a segment is FREE → grant reservation.
- *   3. If a segment is OCCUPIED by another train → deny (conflict).
- *   4. Head-on conflicts (opposing direction) are CRITICAL — triggers yielding.
- *   5. Same-direction conflicts are SOFT — triggers slowdown/queueing.
- *   6. Reservations auto-expire after TTL ticks (safety net).
- *   7. Trains release segments behind them as they advance.
- *
- * Collision prevention guarantee:
- *   Two trains CANNOT hold active reservations on the same segment
- *   in opposing directions simultaneously.
+ * Virtual Block System (VBS) — менеджер динамической блокировки участков путей.
  */
 public class VirtualBlockSystem {
 
     private static VirtualBlockSystem instance;
 
-    /** segmentKey -> active reservation */
-    private final Map<String, TrackReservation> reservations = new ConcurrentHashMap<>();
+    public record SegmentKey(int dimHash, long posA, long posB) {
+        /** Create a normalized key (posA <= posB for deterministic ordering). */
+        public static SegmentKey of(int dimHash, BlockPos a, BlockPos b) {
+            long la = a.asLong(), lb = b.asLong();
+            return la <= lb ? new SegmentKey(dimHash, la, lb) : new SegmentKey(dimHash, lb, la);
+        }
+
+        public static SegmentKey of(String dimensionId, BlockPos a, BlockPos b) {
+            return of(dimensionId.hashCode(), a, b);
+        }
+
+        public static SegmentKey of(BlockPos a, BlockPos b) {
+            return of(OVERWORLD_DIM_HASH, a, b);
+        }
+    }
+
+    /** Pre-computed dimension hash for "minecraft:overworld" — avoids hashCode() per call. */
+    private static final int OVERWORLD_DIM_HASH = "minecraft:overworld".hashCode();
+
+    /** segment key -> active reservation */
+    private final Map<SegmentKey, TrackReservation> reservations = new ConcurrentHashMap<>();
 
     /** trainId -> list of segment keys that train has reserved */
-    private final Map<UUID, List<String>> trainReservations = new ConcurrentHashMap<>();
+    private final Map<UUID, List<SegmentKey>> trainReservations = new ConcurrentHashMap<>();
 
     private VirtualBlockSystem() {}
 
@@ -64,8 +64,18 @@ public class VirtualBlockSystem {
      */
     public ReservationResult tryReserve(UUID trainId, BlockPos segmentStart, BlockPos segmentEnd,
                                          boolean forward, long currentTick) {
+        return tryReserve(OVERWORLD_DIM_HASH, trainId, segmentStart, segmentEnd, forward, currentTick);
+    }
+
+    public ReservationResult tryReserve(String dimensionId, UUID trainId, BlockPos segmentStart, BlockPos segmentEnd,
+                                         boolean forward, long currentTick) {
+        return tryReserve(dimensionId.hashCode(), trainId, segmentStart, segmentEnd, forward, currentTick);
+    }
+
+    private ReservationResult tryReserve(int dimHash, UUID trainId, BlockPos segmentStart, BlockPos segmentEnd,
+                                          boolean forward, long currentTick) {
         long ttl = RailwayConfig.reservationTTLTicks.get();
-        String key = makeSegmentKey(segmentStart, segmentEnd);
+        SegmentKey key = SegmentKey.of(dimHash, segmentStart, segmentEnd);
 
         TrackReservation existing = reservations.get(key);
 
@@ -131,9 +141,9 @@ public class VirtualBlockSystem {
      * Release all reservations held by a specific train.
      */
     public void releaseAll(UUID trainId) {
-        List<String> keys = trainReservations.remove(trainId);
+        List<SegmentKey> keys = trainReservations.remove(trainId);
         if (keys != null) {
-            for (String key : keys) {
+            for (SegmentKey key : keys) {
                 TrackReservation res = reservations.get(key);
                 if (res != null && res.getOwnerTrainId().equals(trainId)) {
                     res.release();
@@ -147,14 +157,14 @@ public class VirtualBlockSystem {
      * Release a specific segment reservation if owned by the given train.
      */
     public void releaseSegment(UUID trainId, BlockPos segmentStart, BlockPos segmentEnd) {
-        String key = makeSegmentKey(segmentStart, segmentEnd);
+        SegmentKey key = SegmentKey.of(segmentStart, segmentEnd);
 
         TrackReservation existing = reservations.get(key);
         if (existing != null && existing.getOwnerTrainId().equals(trainId)) {
             existing.release();
             reservations.remove(key);
 
-            List<String> keys = trainReservations.get(trainId);
+            List<SegmentKey> keys = trainReservations.get(trainId);
             if (keys != null) {
                 keys.remove(key);
             }
@@ -165,7 +175,7 @@ public class VirtualBlockSystem {
      * Check if a segment is currently reserved by any train.
      */
     public boolean isSegmentReserved(BlockPos segmentStart, BlockPos segmentEnd, long currentTick) {
-        String key = makeSegmentKey(segmentStart, segmentEnd);
+        SegmentKey key = SegmentKey.of(segmentStart, segmentEnd);
         TrackReservation existing = reservations.get(key);
         return existing != null && existing.isActive() && !existing.isExpired(currentTick);
     }
@@ -175,7 +185,7 @@ public class VirtualBlockSystem {
      * Returns null if the segment is free.
      */
     public UUID getSegmentOwner(BlockPos segmentStart, BlockPos segmentEnd, long currentTick) {
-        String key = makeSegmentKey(segmentStart, segmentEnd);
+        SegmentKey key = SegmentKey.of(segmentStart, segmentEnd);
         TrackReservation existing = reservations.get(key);
         if (existing != null && existing.isActive() && !existing.isExpired(currentTick)) {
             return existing.getOwnerTrainId();
@@ -188,13 +198,13 @@ public class VirtualBlockSystem {
      * Called every N ticks from the event handler.
      */
     public void cleanupExpired(long currentTick) {
-        Iterator<Map.Entry<String, TrackReservation>> it = reservations.entrySet().iterator();
+        Iterator<Map.Entry<SegmentKey, TrackReservation>> it = reservations.entrySet().iterator();
         while (it.hasNext()) {
-            Map.Entry<String, TrackReservation> entry = it.next();
+            Map.Entry<SegmentKey, TrackReservation> entry = it.next();
             TrackReservation res = entry.getValue();
             if (res.isExpired(currentTick) || !res.isActive()) {
                 UUID owner = res.getOwnerTrainId();
-                List<String> keys = trainReservations.get(owner);
+                List<SegmentKey> keys = trainReservations.get(owner);
                 if (keys != null) {
                     keys.remove(entry.getKey());
                     if (keys.isEmpty()) {
@@ -234,22 +244,24 @@ public class VirtualBlockSystem {
      * Get the number of segments reserved by a specific train.
      */
     public int getTrainReservationCount(UUID trainId) {
-        List<String> keys = trainReservations.get(trainId);
+        List<SegmentKey> keys = trainReservations.get(trainId);
         return keys != null ? keys.size() : 0;
     }
 
     /**
-     * Generate a normalized segment key from two BlockPos positions (v1.0.7).
-     * This is a static utility so callers don't need a TrackReservation object.
+     * Generate a normalized segment key from two BlockPos positions ().
+     * : Returns a record-based key instead of String concatenation.
+     * Kept as public static for backward compatibility with external callers.
      */
-    public static String makeSegmentKey(BlockPos a, BlockPos b) {
-        int cmp = a.compareTo(b);
-        BlockPos first = cmp <= 0 ? a : b;
-        BlockPos second = cmp <= 0 ? b : a;
-        return first.toShortString() + "|" + second.toShortString();
+    public static SegmentKey makeSegmentKey(BlockPos a, BlockPos b) {
+        return SegmentKey.of(a, b);
     }
 
-    private void commitReservation(String key, TrackReservation reservation, UUID trainId) {
+    public static SegmentKey makeSegmentKey(String dimensionId, BlockPos a, BlockPos b) {
+        return SegmentKey.of(dimensionId, a, b);
+    }
+
+    private void commitReservation(SegmentKey key, TrackReservation reservation, UUID trainId) {
         reservations.put(key, reservation);
         trainReservations.computeIfAbsent(trainId, k -> new ArrayList<>()).add(key);
     }

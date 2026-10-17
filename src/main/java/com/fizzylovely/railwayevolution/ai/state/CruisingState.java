@@ -8,13 +8,12 @@ import org.jetbrains.annotations.Nullable;
 /**
  * CruisingState — нормальная работа: движение по маршруту, непрерывный скан.
  *
- * Переходы:
+ * Переходы
  *   → FLOW_FOLLOWER      если обнаружен попутный поезд в диапазоне потока
  *   → ANALYZING_OBSTACLE если риск > LOW_RISK_THRESHOLD
  *   → WAIT_FOR_CLEARANCE если TTC критический (< 1.5 сек)
  *   → TRAFFIC_JAM        если зажаты
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public final class CruisingState implements TrainControlState {
 
@@ -29,6 +28,9 @@ public final class CruisingState implements TrainControlState {
         if (ctx.selfHandle != null) {
             ctx.selfHandle.restoreFullThrottle();
             ctx.selfHandle.resumeNavigation();
+            // Сброс aging — поезд возобновил движение, starvation-счётчик обнуляется
+            com.fizzylovely.railwayevolution.ai.priority.TrainPriorityRegistry
+                .getInstance().resetAging(ctx.selfHandle.getId());
         }
         CreateRailwayMod.aiDebug("[FSM] {} → CRUISING", shortId(ctx));
     }

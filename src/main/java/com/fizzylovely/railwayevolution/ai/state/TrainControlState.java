@@ -6,14 +6,13 @@ import org.jetbrains.annotations.Nullable;
 /**
  * TrainControlState — интерфейс одного состояния конечного автомата.
  *
- * Принципы:
+ * Принципы
  *   1. Нет аллокаций в {@link #tick} — используй поля из ctx.
  *   2. {@link #onEnter} вызывается ровно один раз при входе.
  *   3. {@link #onExit} вызывается ровно один раз при выходе.
  *   4. {@link #tick} возвращает null чтобы остаться в текущем состоянии,
  *      или TrainStateId следующего состояния.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public interface TrainControlState {
 

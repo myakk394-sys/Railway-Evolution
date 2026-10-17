@@ -12,7 +12,6 @@ import java.util.Map;
  * Скрывает внутренние типы Create (TrackGraph, TrackNode, TrackEdge)
  * за версионно-независимым API.
  *
- * Copyright (c) 2026 Fizzy. Licensed under the MIT License.
  */
 public interface ITrainGraph {
 
